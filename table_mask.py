@@ -1,7 +1,7 @@
 """
 Step 1: find the blue cloth, then the outline of the table.
 
-- Threshold cloth colour (blue) in HLS (Hue, Saturation, Lightness) 
+- Threshold cloth colour (blue) in HSV 
 - Clean up with opening and closing morphological operations
 - Keep largest colour and take its convex hull 
 
