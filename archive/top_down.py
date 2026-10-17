@@ -18,7 +18,7 @@ due to the corners sitting of top of the cushions
 import cv2
 import numpy as np
 
-import config
+import archive.config as config
 
 def make_map_transform(corners):
     """

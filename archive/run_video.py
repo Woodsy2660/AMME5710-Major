@@ -23,14 +23,14 @@ import cv2
 import numpy as np
 
 import config
-import table_mask
-import table_corners
-import top_down
-import ball_detection
-import draw
+import archive.table_mask as table_mask
+import archive.table_corners as table_corners
+import archive.top_down as top_down
+import archive.ball_detection as ball_detection
+import archive.draw as draw
 import update_game_state
-from run_photo import find_cloth_center
-from top_down import move_point
+from archive.run_photo import find_cloth_center
+from archive.top_down import move_point
 
 # Tracker functions from update_game_state.py. Rename here if yours differ.
 start_tracking = update_game_state.initialise_tracking

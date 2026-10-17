@@ -5,7 +5,7 @@ Step 6: pictures of the result. Nothing here affects detection. Built to be modu
 import cv2
 import numpy as np
 
-import config
+import archive.config as config
 
 # Drawing colours in BGR order.
 DRAW_COLOURS = {'cue': (235, 235, 235), 'black': (40, 40, 40),

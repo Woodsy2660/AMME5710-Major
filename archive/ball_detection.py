@@ -16,8 +16,8 @@ import numpy as np
 from sklearn.cluster import KMeans
 
 import config
-import ball_colour
-from top_down import move_point, ball_radius_in_photo
+import archive.ball_colour as ball_colour
+from archive.top_down import move_point, ball_radius_in_photo
 
 def is_near_pocket(map_x, map_y):
     """

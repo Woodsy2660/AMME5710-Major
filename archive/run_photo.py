@@ -7,11 +7,11 @@ import os
 import cv2
 import numpy as np
 
-import table_mask
-import table_corners
-import top_down
-import ball_detection
-import draw
+import archive.table_mask as table_mask
+import archive.table_corners as table_corners
+import archive.top_down as top_down
+import archive.ball_detection as ball_detection
+import archive.draw as draw
 import update_game_state
 
 def find_cloth_center(image_bgr):

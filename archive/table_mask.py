@@ -10,7 +10,7 @@ Step 1: find the blue cloth, then the outline of the table.
 import cv2 
 import numpy as np 
 
-import config 
+import archive.config as config 
 
 def find_cloth_mask(image_bgr, click_x, click_y):
     """

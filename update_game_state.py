@@ -1,6 +1,6 @@
 import numpy as np
 from scipy.optimize import linear_sum_assignment
-from ball_detection import is_near_pocket
+from archive.ball_detection import is_near_pocket
 # Compare the ball info (received from ball_detector.py) at every frame 
 # Output game events
 # Output which player's turn it is

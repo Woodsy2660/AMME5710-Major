@@ -9,7 +9,7 @@ Step 5: decidee what colour a ball is: cue, black, red, yellow.
 
 import numpy as np
 
-import config 
+import archive.config as config 
 
 OTHER = 0
 WHITE = 1 
