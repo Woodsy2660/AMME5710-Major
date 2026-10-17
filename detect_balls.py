@@ -100,7 +100,7 @@ def find_table_corners(frame):
 def table_transform(corners, rail=40):
     # Determine the transform for normalised perspective view of the table
     w, h = 800, 400
-    corners = np.roll(corners, -1, axis=0)
+    # corners = np.roll(corners, -1, axis=0)
     dst = np.array([[-rail, -rail], [w + rail, -rail],
                     [w + rail, h + rail], [-rail, h + rail]], dtype=np.float32)
     M = cv2.getPerspectiveTransform(corners, dst)   # Compute the perspective transform matrix
@@ -127,7 +127,7 @@ def find_balls(frame, M):
             continue
         circularity = 4 * np.pi * area / (perimeter ** 2)
             
-        if circularity > 0.5:  # filter out non-circular contours
+        if circularity > 0.3:  # filter out non-circular contours
             (x, y), radius = cv2.minEnclosingCircle(contour)
             balls.append((int(x), int(y), int(radius)))
 
@@ -168,20 +168,31 @@ def check_table(frame, M, w=800, h=400):
 
     return overlay, warped
 
+
 def main():
-    img = cv2.imread(r'Table images/839999399_2303128927107538_4571142254927940165_n.jpg')      # horizontal table
-    # img = cv2.imread(r'Table images/840599825_1837650447578857_2846709159424431200_n.jpg')    # diagonal table view
-    corners = pick_table_corners(img)
+    cap = cv2.VideoCapture('IMG_0484.MOV')
+    ok, frame = cap.read()
+    if not ok:
+        raise RuntimeError('Could not read video')
+
+    corners = pick_table_corners(frame)
     M = table_transform(corners)
-    balls, warped = find_balls(img, M)
-    # overlay, warped = check_table(img, M)
-    # cv2.imshow('Overlay', overlay)
-    # cv2.imshow('Warped', warped)
-    # cv2.waitKey(0)
-    print(f"Detected {len(balls)} balls")
-    classified = classify_balls(balls, warped)
-    for (x, y, radius, color) in classified:
-        print(f"Ball at ({x}, {y}) with radius {radius} classified as {color}")
+
+    draw_colours = {'red': (0, 0, 255), 'yellow': (0, 255, 255),
+                    'white': (255, 255, 255), 'black': (128, 128, 128)}
+
+    while ok:
+        balls, warped = find_balls(frame, M)
+        classified = classify_balls(balls, warped)   # classify before drawing on warped
+
+        for (x, y, r, label) in classified:
+            cv2.circle(warped, (x, y), r + 2, draw_colours[label], 2)
+
+        cv2.imshow('Detections', warped)
+        ok, frame = cap.read()
+
+    cap.release()
+    cv2.destroyAllWindows()
 
 if __name__ == '__main__':
     main()
