@@ -9,6 +9,7 @@ import numpy as np
 TABLE_HSV_MIN = (90, 50, 50)  # HSV range for table colour
 TABLE_HSV_MAX = (120, 255, 255)
 
+# manual corner selection for the table, remove this later
 def pick_table_corners(frame, max_display=1200):
     """Manually click the 4 table corners.
     Left-click: add point | Right-click / 'u': undo | 'r': reset
@@ -100,7 +101,7 @@ def find_table_corners(frame):
 def table_transform(corners, rail=40):
     # Determine the transform for normalised perspective view of the table
     w, h = 800, 400
-    # corners = np.roll(corners, -1, axis=0)
+    corners = np.roll(corners, -1, axis=0)
     dst = np.array([[-rail, -rail], [w + rail, -rail],
                     [w + rail, h + rail], [-rail, h + rail]], dtype=np.float32)
     M = cv2.getPerspectiveTransform(corners, dst)   # Compute the perspective transform matrix
@@ -123,11 +124,11 @@ def find_balls(frame, M):
     for contour in contours:
         area = cv2.contourArea(contour)
         perimeter = cv2.arcLength(contour, True)
-        if area < 50 or perimeter == 0:
+        if area < 50 or perimeter == 0 or area > 2000:  # filter out too small or too large contours (TO DO: TUNE)
             continue
         circularity = 4 * np.pi * area / (perimeter ** 2)
             
-        if circularity > 0.3:  # filter out non-circular contours
+        if circularity > 0.4:  # filter out non-circular contours
             (x, y), radius = cv2.minEnclosingCircle(contour)
             balls.append((int(x), int(y), int(radius)))
 
@@ -153,24 +154,10 @@ def classify_balls(balls, warped):
         classified.append((x, y, r, label))
     return classified
 
-# REMOVE THIS LATER: This function is just for visualisation and debugging
-def check_table(frame, M, w=800, h=400):
-    # Project the warp's edges back onto the original image
-    outline = np.float32([[[0, 0]], [[w, 0]], [[w, h]], [[0, h]]])
-    outline = cv2.perspectiveTransform(outline, np.linalg.inv(M))
-    overlay = frame.copy()
-    cv2.polylines(overlay, [outline.astype(np.int32)], True, (0, 0, 255), 3)
-
-    # Mark where the six pockets should be in the top-down view
-    warped = cv2.warpPerspective(frame, M, (w, h))
-    for x, y in [(0, 0), (w // 2, 0), (w, 0), (0, h), (w // 2, h), (w, h)]:
-        cv2.circle(warped, (x, y), 15, (0, 0, 255), 2)
-
-    return overlay, warped
-
 
 def main():
-    cap = cv2.VideoCapture('IMG_0484.MOV')
+    # cap = cv2.VideoCapture('IMG_7394.MOV')
+    cap = cv2.VideoCapture(r'C:\Users\User\Documents\AMME5710-Major\ScreenRecording_10-17-2026 21-30-39_1.mp4')
     ok, frame = cap.read()
     if not ok:
         raise RuntimeError('Could not read video')
@@ -189,6 +176,8 @@ def main():
             cv2.circle(warped, (x, y), r + 2, draw_colours[label], 2)
 
         cv2.imshow('Detections', warped)
+        if cv2.waitKey(1) & 0xFF == ord('q'):   # q to quit
+            break
         ok, frame = cap.read()
 
     cap.release()
