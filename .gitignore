@@ -1,0 +1,9 @@
+# Video files
+*.mp4
+
+# Results folder
+results/
+
+# Python cache
+__pycache__/
+*.pyc
