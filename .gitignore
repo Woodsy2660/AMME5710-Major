@@ -7,3 +7,6 @@ results/
 # Python cache
 __pycache__/
 *.pyc
+
+# Game logs from gui.py
+logs/

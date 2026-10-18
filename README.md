@@ -91,6 +91,27 @@ Detects and locates balls on a pool table from photos or video, generates a top-
    - Ball in old state with no match in new = potted (name nearest pocket)
    - Ball in new state with no match in old = appeared
 
+### Scoring and GUI (`board_watcher.py`, `game_state.py`, `gui.py`)
+
+1. **Shots** (`board_watcher.py`)
+   - Uses `run_video.py`'s still / view-blocked / two-readings-agree tests to keep trusted board states
+   - A shot = table motion between two kept states AND the balls ended up somewhere else
+   - Potted = ball counts per colour before minus after (capped at a full rack), with the nearest pocket named
+   - Cue ball put back by hand after a scratch is not a shot
+
+2. **Rules** (`game_state.py`) - blackball pool, 7 red / 7 yellow
+   - Open table until a player pots only one colour
+   - Potting your own colour keeps your turn
+   - Fouls: cue ball potted, opponent's colour potted; the other player gets two visits
+   - Black: wins after clearing your colour, loses otherwise (including with your last ball)
+
+3. **Game window** (`gui.py`)
+   - Live view with the last kept board state, top-down map, scoreboard, event log
+   - Keys: `u` undo shot, `s` swap turn, `n` new game, `k` find table again, `space` pause, `q` quit
+   - Ground-truth logger: `r` `y` `b` `c` then `enter` records what really went down; every game writes `logs/game_<time>.csv` with system and truth rows for scoring accuracy
+
+Tests (no video needed): `python test_game_state.py`
+
 ## Usage
 
 **Photos:**
@@ -104,6 +125,13 @@ Processes all images in `Table images/` and saves results to `results/`.
 python run_video.py "path/to/video.mp4"
 ```
 Outputs: `_tracked.mp4` (annotated video), `_state_N.jpg` (each board state), `_events.txt` (game events)
+
+**Game window:**
+```bash
+python gui.py --video "path/to/video.mp4" --players Ben Natalie
+python gui.py                            # webcam / iPhone
+python gui.py --photos "Table images"    # still photos, space = next
+```
 
 ## Requirements
 

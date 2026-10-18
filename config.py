@@ -56,3 +56,6 @@ OCCLUDER_BIG_FRACTION = 0.024     # a non-cloth lump bigger than this is a perso
 OCCLUDER_EDGE_FRACTION = 0.012    # ... or bigger than this and touching the table edge (arms come in from outside)
 READ_EVERY = 15                   # frames between two readings of the board (0.5 s at 30 fps)
 AGREE_TOLERANCE = 1.0             # two readings agree if every ball is within this many map radii
+# Game rules and scoring (game_state.py, board_watcher.py)
+BALLS_PER_COLOUR = 7              # blackball pool: 7 red, 7 yellow, 1 black, 1 cue
+FOUL_GIVES_TWO_VISITS = True      # after a foul the other player gets two visits (pub rules)
