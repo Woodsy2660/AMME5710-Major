@@ -12,7 +12,6 @@ import table_corners
 import top_down
 import ball_detection
 import draw
-import update_game_state
 
 def find_cloth_center(image_bgr):
     """

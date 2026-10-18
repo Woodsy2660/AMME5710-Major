@@ -49,8 +49,8 @@ FIRST_SIDE_IS_LONG = None
 # depend on the video size.
 SIGNAL_SCALE = 0.5                # frames are shrunk by this before measuring motion (speed)
 MOVING_PIXEL_DIFF = 25            # grey-level change between two frames that counts as "moving"
-MOVE_HIGH_FRACTION = 0.012        # moving pixels above this: a shot is in progress
-MOVE_LOW_FRACTION = 0.0016        # moving pixels below this: still
+MOVE_HIGH_FRACTION = 0.002        # moving pixels above this: a shot is in progress
+MOVE_LOW_FRACTION = 0.0005        # moving pixels below this: still
 HOLD_FRAMES = 15                  # still for this many frames in a row before the table counts as settled
 OCCLUDER_BIG_FRACTION = 0.024     # a non-cloth lump bigger than this is a person, arm or cue
 OCCLUDER_EDGE_FRACTION = 0.012    # ... or bigger than this and touching the table edge (arms come in from outside)

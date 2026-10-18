@@ -3,7 +3,7 @@ import cv2
 
 import config
 import numpy as np
-import config, ball_colour, ball_detection, table_mask, table_corners, top_down, draw, run_video
+import config, ball_colour, ball_detection, table_mask, table_corners, top_down, draw
 # Tracking numbers (move to config.py once they are tuned). Distances are map px unless stated.
 WINDOW_BASE_RADII = 3.0     # search window half-size for a found ball, in ball radii
 WINDOW_SPEED_FACTOR = 1.5   # extra half-size per map px the ball is expected to move this frame
