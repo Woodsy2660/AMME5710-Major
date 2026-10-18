@@ -48,20 +48,33 @@ def find_cloth_mask(image_bgr, click_x, click_y, cloth_colour=None):
         cloth_colour = cloth_colour_at(image_bgr, click_x, click_y)
     cloth_hue, cloth_saturation, cloth_value = cloth_colour
 
-    hue = image_hsv[:, :, 0].astype(float)
-    saturation = image_hsv[:, :, 1].astype(float)
-    value = image_hsv[:, :, 2].astype(float)
+    # hue = image_hsv[:, :, 0].astype(float)
+    # saturation = image_hsv[:, :, 1].astype(float)
+    # value = image_hsv[:, :, 2].astype(float)
 
-    # Hue is an angle that wraps round (179 is next to 0), so the difference
-    # between two hues is the shorter way round the circle.
-    hue_difference = np.abs(hue - cloth_hue)
+    # # Hue is an angle that wraps round (179 is next to 0), so the difference
+    # # between two hues is the shorter way round the circle.
+    # hue_difference = np.abs(hue - cloth_hue)
+    # hue_difference = np.minimum(hue_difference, 180 - hue_difference)
+
+    # is_cloth = (hue_difference < config.CLOTH_HUE_TOLERANCE) \
+    #     & (np.abs(value - cloth_value) < config.CLOTH_VALUE_TOLERANCE) \
+    #     & (saturation > cloth_saturation - config.CLOTH_SATURATION_DROP)
+
+    # cloth_mask = (is_cloth * 255).astype(np.uint8)
+
+    levels = np.arange(256, dtype=float)
+    hue_difference = np.abs(levels - cloth_hue)
     hue_difference = np.minimum(hue_difference, 180 - hue_difference)
 
-    is_cloth = (hue_difference < config.CLOTH_HUE_TOLERANCE) \
-        & (np.abs(value - cloth_value) < config.CLOTH_VALUE_TOLERANCE) \
-        & (saturation > cloth_saturation - config.CLOTH_SATURATION_DROP)
+    hue_ok   = ((hue_difference < config.CLOTH_HUE_TOLERANCE) * 255).astype(np.uint8)
+    sat_ok   = ((levels > cloth_saturation - config.CLOTH_SATURATION_DROP) * 255).astype(np.uint8)
+    value_ok = ((np.abs(levels - cloth_value) < config.CLOTH_VALUE_TOLERANCE) * 255).astype(np.uint8)
 
-    cloth_mask = (is_cloth * 255).astype(np.uint8)
+    h, s, v = cv2.split(image_hsv)
+    cloth_mask = cv2.bitwise_and(cv2.LUT(h, hue_ok),
+                                cv2.bitwise_and(cv2.LUT(s, sat_ok), cv2.LUT(v, value_ok)))
+
     return image_hsv, cloth_mask
 
 def find_table_outline(cloth_mask, click_x, click_y):

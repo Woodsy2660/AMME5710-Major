@@ -209,15 +209,20 @@ def find_balls(image_hsv, cloth_mask, table_contour, table_hull, to_map, to_phot
                 continue                                  # a pocket or a length of rail
 
             blob_mask = (blob_image == blob).astype(np.uint8)
-            thickness = cv2.distanceTransform(blob_mask, cv2.DIST_L2, 5).max()
-            if thickness < config.MIN_THICKNESS_RATIO * expected_radius:
-                continue                                  # too thin: cue stick, seam or rail sliver
+            # thickness = cv2.distanceTransform(blob_mask, cv2.DIST_L2, 5).max()
+            # if thickness < config.MIN_THICKNESS_RATIO * expected_radius:
+            #     continue                                  # too thin: cue stick, seam or rail sliver
 
             # Work on a crop round the blob (a bit bigger than the blob) to keep it quick.
             pad = int(expected_radius) + 2
             y0, y1 = max(0, top - pad), min(image_height, top + height + pad)
             x0, x1 = max(0, left - pad), min(image_width, left + width + pad)
             blob_crop = blob_mask[y0:y1, x0:x1]
+
+            thickness = cv2.distanceTransform(blob_crop, cv2.DIST_L2, 5).max()
+            if thickness < config.MIN_THICKNESS_RATIO * expected_radius:
+                continue                                  # too thin: cue stick, seam or rail sliver
+
             crop_pixels = image_hsv[y0:y1, x0:x1].reshape(-1, 3)
             labels = ball_colour.label_pixels(crop_pixels).reshape(blob_crop.shape)
 

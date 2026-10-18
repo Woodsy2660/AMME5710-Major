@@ -342,7 +342,8 @@ def main():
         gray = shrink_to_gray(frame)
         moving = moving_pixels(gray, previous_gray, reference)
         previous_gray = gray
-        readable = update_detector(detector, moving, view_is_blocked(frame, reference), reference)
+        # readable = update_detector(detector, moving, view_is_blocked(frame, reference), reference)
+        readable = update_detector(detector, moving, False, reference)
 
         # 4. read the board when readable, commit when two readings agree (once per window)
         if not readable:
@@ -353,22 +354,26 @@ def main():
             frames_since_reading = frames_since_reading + 1
             if frames_since_reading >= config.READ_EVERY:
                 frames_since_reading = 0
-                reading = read_board(frame, reference, click_x, click_y)
-                if previous_reading is not None and same_reading(previous_reading, reading):
-                    states.append((frame_index, time, reading))
-                    window_committed = True
-                    title = 'state %d  t = %.1f s  %s' % (len(states), time, counts_text(count_colours(reading)))
-                    print(title)
-                    overlay = draw.draw_overlay(frame, reference['table_hull'], reference['corners'], reading)
-                    cv2.imwrite(os.path.join('results', '%s_state_%d.jpg' % (name, len(states))),
-                                draw_status(side_by_side(overlay, reading), [title]))
-                    # 5. events
-                    if len(states) >= 2:
-                        found = events_between(states[-2][2], reading)
-                        line = '%.1f s -> %.1f s : %s' % (states[-2][1], time, '; '.join(found) if found else 'no change')
-                        print('   ', line)
-                        event_lines.append(line)
-                previous_reading = reading
+                detector['blocked'] = view_is_blocked(frame, reference)
+                if detector['blocked']:
+                    previous_reading = None
+                else:
+                    reading = read_board(frame, reference, click_x, click_y)
+                    if previous_reading is not None and same_reading(previous_reading, reading):
+                        states.append((frame_index, time, reading))
+                        window_committed = True
+                        title = 'state %d  t = %.1f s  %s' % (len(states), time, counts_text(count_colours(reading)))
+                        print(title)
+                        overlay = draw.draw_overlay(frame, reference['table_hull'], reference['corners'], reading)
+                        cv2.imwrite(os.path.join('results', '%s_state_%d.jpg' % (name, len(states))),
+                                    draw_status(side_by_side(overlay, reading), [title]))
+                        # 5. events
+                        if len(states) >= 2:
+                            found = events_between(states[-2][2], reading)
+                            line = '%.1f s -> %.1f s : %s' % (states[-2][1], time, '; '.join(found) if found else 'no change')
+                            print('   ', line)
+                            event_lines.append(line)
+                    previous_reading = reading
 
         # Output video and preview: the LAST COMMITTED state drawn on the current frame.
         if not arguments.no_video or arguments.show:
