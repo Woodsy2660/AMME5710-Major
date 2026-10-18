@@ -16,6 +16,8 @@ Usage
     python gui.py --photos "Table images"  step through still photos (space = next)
     python gui.py --players Ben Natalie    player names
     python gui.py --video game.mp4 --speed 2   play a recording at twice real time
+    python gui.py --video clip.mov --mid-game --record demo.mp4 --headless
+                                           clip from part-way through a game, saved as a video
 
 Keys
     q / esc   quit                         space   pause (photos: next photo)
@@ -36,6 +38,7 @@ import numpy as np
 
 import config
 import draw
+import run_video
 from board_watcher import BoardWatcher
 from game_state import GameState
 
@@ -228,6 +231,22 @@ def open_source(args):
     return next_frame, play_fps
 
 
+def open_recording(path, picture, fps):
+    """
+    A video writer the size of the window picture. H.264 ('avc1') plays everywhere
+    (QuickTime, phones); 'mp4v' is the fallback if this OpenCV build lacks it.
+    """
+    folder = os.path.dirname(path)
+    if folder:
+        os.makedirs(folder, exist_ok=True)
+    size = (picture.shape[1], picture.shape[0])
+    for codec in ('avc1', 'mp4v'):
+        writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*codec), fps, size)
+        if writer.isOpened():
+            return writer
+    raise SystemExit(f'Could not open {path} for writing')
+
+
 def main():
     parser = argparse.ArgumentParser(description='8-ball pool scoring window')
     parser.add_argument('--camera', type=int, default=0)
@@ -238,6 +257,15 @@ def main():
                         help='video playback speed, e.g. 2 = twice real time')
     parser.add_argument('--click', nargs=2, type=int, metavar=('X', 'Y'),
                         help='a pixel on bare cloth in the first frame')
+    parser.add_argument('--mid-game', action='store_true',
+                        help='the video starts part-way through a game: take the ball counts from the first board')
+    parser.add_argument('--first-player-colour', choices=['red', 'yellow'],
+                        help='with --mid-game: the colour the first named player is on')
+    parser.add_argument('--moving-camera', action='store_true',
+                        help='handheld camera: find the table again at every board reading')
+    parser.add_argument('--record', metavar='PATH', help='also save the window as a video (.mp4)')
+    parser.add_argument('--headless', action='store_true',
+                        help='no window (use with --record): process the whole video and stop')
     args = parser.parse_args()
 
     next_frame, play_fps = open_source(args)
@@ -246,7 +274,7 @@ def main():
     frame = next_frame()
     if frame is None:
         raise SystemExit('No frames to read')
-    watcher = BoardWatcher(frame, args.click)
+    watcher = BoardWatcher(frame, args.click, args.moving_camera)
 
     game = GameState(args.players)
     truth_log = GroundTruthLog()
@@ -255,8 +283,11 @@ def main():
     paused = False
     first = True
     next_show_time = time.time()
+    joined_mid_game = False
+    writer = None
 
-    cv2.namedWindow('Pool', cv2.WINDOW_NORMAL)
+    if not args.headless:
+        cv2.namedWindow('Pool', cv2.WINDOW_NORMAL)
 
     while True:
         if first or not paused:
@@ -285,6 +316,12 @@ def main():
                     message = f"error: {error}"[:40]
                     result = None
 
+                # Picking up a game in progress: the first kept board sets the ball counts.
+                if args.mid_game and not joined_mid_game and watcher.committed_balls is not None:
+                    counts = run_video.count_colours(watcher.committed_balls)
+                    game.start_mid_game(counts['red'], counts['yellow'], args.first_player_colour)
+                    joined_mid_game = True
+
                 if result is not None and game.winner is None:
                     history.append(copy.deepcopy(game))
                     shooter = game.current
@@ -292,7 +329,16 @@ def main():
                     truth_log.write('system', game.shot_number, game.players[shooter],
                                     result['potted'], event['fouls'], result['note'])
 
-        cv2.imshow('Pool', render(frame, watcher, game, truth_log, message))
+        picture = render(frame, watcher, game, truth_log, message)
+        if args.record and (not paused or writer is None):
+            if writer is None:
+                writer = open_recording(args.record, picture, play_fps or 30.0)
+            writer.write(picture)
+        if args.headless:
+            if message == 'end of input':
+                break
+            continue
+        cv2.imshow('Pool', picture)
 
         # Hold each video frame until its time comes, so the video plays at real speed.
         wait_ms = 30 if paused else 1
@@ -336,7 +382,11 @@ def main():
             truth_log.save_pending()
             message = 'truth saved'
 
-    cv2.destroyAllWindows()
+    if writer is not None:
+        writer.release()
+        print(f"Recording saved to {args.record}")
+    if not args.headless:
+        cv2.destroyAllWindows()
     print(f"Log saved to {truth_log.path}")
 
 

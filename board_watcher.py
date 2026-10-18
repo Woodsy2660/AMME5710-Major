@@ -64,13 +64,15 @@ def shot_result(balls_before, balls_after):
 
 class BoardWatcher:
 
-    def __init__(self, first_frame=None, click=None):
+    def __init__(self, first_frame=None, click=None, moving_camera=False):
         """
         The table is found from the first frame (camera on a tripod, table clear).
+        moving_camera: the camera is handheld, so find the table again at every reading.
         first_frame can be left out to test commit() on its own.
         """
         self.committed_balls = None          # the last kept board state
         self.shot_since_commit = False       # has the table seen a shot since then?
+        self.moving_camera = moving_camera
         self.status = 'settling'
         if first_frame is not None:
             self.calibrate(first_frame, click)
@@ -88,6 +90,16 @@ class BoardWatcher:
 
     def read(self, frame):
         """The ball list for one frame."""
+        if self.moving_camera:
+            # The table has moved in the picture since the last reading: find it again,
+            # so the top-down map positions stay right. Readings only happen while the
+            # table is still, so this extra work (about 0.3 s) is rare.
+            try:
+                click_x, click_y = run_video.find_click(frame, None)
+                self.reference = run_video.make_reference(frame, click_x, click_y)
+                self.click_x, self.click_y = click_x, click_y
+            except Exception:
+                pass                          # keep the last good table if this frame fails
         return run_video.read_board(frame, self.reference, self.click_x, self.click_y)
 
     def update(self, frame):
@@ -100,7 +112,12 @@ class BoardWatcher:
         self.previous_gray = gray
         readable = run_video.update_detector(self.detector, moving, False, self.reference)
 
-        if self.detector['state'] == 'SHOT':
+        # Any movement on the table could be a shot. A gently rolled ball never reaches
+        # run_video's SHOT threshold, so the lower 'still' threshold is used here.
+        # Movement that was not a shot (leaning in, a camera wobble) is caught in commit(),
+        # which also requires the balls to have ended up somewhere else.
+        if self.detector['state'] == 'SHOT' \
+                or moving >= config.MOVE_LOW_FRACTION * self.reference['table_area_small']:
             self.shot_since_commit = True
 
         result = None
@@ -148,6 +165,7 @@ class BoardWatcher:
         before = self.committed_balls
         self.committed_balls = balls
         if before is None:
+            self.shot_since_commit = False
             return None                       # first view of the table
         if not self.shot_since_commit:
             return None                       # view was blocked then cleared: not a shot

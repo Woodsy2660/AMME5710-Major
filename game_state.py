@@ -46,6 +46,19 @@ class GameState:
         self.shot_number = 0
         self.log = []                          # one line of text per shot, for the GUI
 
+    def start_mid_game(self, red_left, yellow_left, first_player_colour=None):
+        """
+        Pick up a game already in progress (e.g. a clip from halfway through).
+        - red_left, yellow_left : balls of each colour still on the table
+        - first_player_colour : 'red' or 'yellow' if known; otherwise the table stays
+          open until the next single-colour pot
+        """
+        self.remaining = {RED: min(red_left, config.BALLS_PER_COLOUR),
+                          YELLOW: min(yellow_left, config.BALLS_PER_COLOUR)}
+        if first_player_colour is not None:
+            self.groups = [first_player_colour, other_colour(first_player_colour)]
+        self.log.append(f"Joined mid-game: {self.remaining[RED]} red, {self.remaining[YELLOW]} yellow left")
+
     def balls_left(self, player):
         """How many of their own balls a player still has to pot (None if table is open)."""
         if self.groups[player] is None:
