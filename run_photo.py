@@ -82,7 +82,22 @@ def process_image(image_path, output_dir):
             print(f"  Failed to load image")
             return False
 
-        balls, table_hull, cormers = detect(image_bgr)
+        # Step 1: Find cloth center automatically
+        click_x, click_y = find_cloth_center(image_bgr)
+
+        # Step 2: Find cloth mask and table outline
+        image_hsv, cloth_mask = table_mask.find_cloth_mask(image_bgr, click_x, click_y)
+        table_contour, table_hull = table_mask.find_table_outline(cloth_mask, click_x, click_y)
+
+        # Step 3: Find corners and orient them
+        corners = table_corners.find_corners(table_hull)
+        corners = table_corners.put_long_side_first(corners, table_contour)
+
+        # Step 4: Create perspective transform
+        to_map, to_photo = top_down.make_map_transform(corners)
+
+        # Step 5: Detect balls
+        balls = ball_detection.find_balls(image_hsv, cloth_mask, table_contour, table_hull, to_map, to_photo)
 
         # Step 6: Draw results
         overlay = draw.draw_overlay(image_bgr, table_hull, corners, balls)

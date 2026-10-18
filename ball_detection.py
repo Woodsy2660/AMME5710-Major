@@ -6,6 +6,18 @@ step 4: find the balls on the table (blob detector).
 in it, red and yellow are trusted here as holes are dark too
 - Touching balls. Merged blob is plit by colour first, then by counting. 
 
+1. Take candidate blobs = anything inside table that it not cloth-coloured, filtered by the expected
+ball size
+2. Inside each blob, make one mask per colour family (red, yellow, dark/white), black and cue share a blob 
+as the black ball carries a bright highlight. A closing fills the highlight hole 
+3. Ball centers are the peaks of the distance transform of each colour mask. The shadow seam between two touching balls is
+not that colour, thus same-colour neighbours seperate. 
+4. A ball that is mostly hidden behind another shows only a sliver. Its peak is weak and sits in the middle of the silver, 
+so a center is pushed inward, away from the cloth. 
+5. The same ball must not be counted twice, two centers closer than 1.5 radii on the map are one ball (real balls are noted as 2 radii apart on the table),
+and two weak peaks close together in the photo are one sliver. 
+6. The colour is the family the mask came from: the dark/white family is split into cue (mostly white), and black (mostly dark).
+
 
 To include: subtracting a photo of the empty table (the backdrop). That is the proper 
 fix for cue and black balls on a cushion, and needs a fixed camera. 
@@ -19,121 +31,150 @@ import config
 import ball_colour
 from top_down import move_point, ball_radius_in_photo
 
-def is_near_pocket(map_x, map_y):
+def is_at_pocket_mouth(map_x, map_y):
     """
-    True if a map position is close to one of the six pockets.
+    True if a map position is in the mouth of one of the six pockets (where the opening is dark).
     """
-
     width = config.MAP_WIDTH
     height = config.MAP_HEIGHT
-    pockets = [(0, 0), (width / 2, 0), (width, 0), (0, height), (width / 2, height), (width, height)]
-
-    nearest = None
-    for pocket_x, pocket_y in pockets:
-        distance = np.hypot(map_x - pocket_x, map_y - pocket_y)
-        if nearest is None or distance < nearest:
-            nearest = distance
-
-    close_to_a_pocket = nearest < 0.24 * height
-    close_to_the_edge = map_y < 0.2 * height or map_y > 0.8 * height \
-        or map_x < 0.1 * width or map_x > 0.9 * width
-    return close_to_a_pocket and close_to_the_edge
-
-def make_ball(colour, xs, ys, to_map):
+    near_a_pocket_column = min(map_x, width - map_x, abs(map_x - width / 2)) < 0.08 * width
+    near_the_long_edge = min(map_y, height - map_y) < 0.12 * height
+    return near_a_pocket_column and near_the_long_edge
+    
+def make_ball(colour, photo_x, photo_y, radius, to_map, visible):
     """
-    builds the record for one ball from the pixels that belong to it.
+    Builds the record for one ball.
     """
-    photo_x = float(np.mean(xs))
-    photo_y = float(np.mean(ys))
     map_x, map_y = move_point(to_map, photo_x, photo_y)
-    # Radius of a circle with the same area as the pixel group: area = pi * r^2.
-    radius = float(np.sqrt(len(xs) / np.pi))
-    return {'colour': colour, 'photo_x': photo_x, 'photo_y': photo_y,
-            'radius': radius, 'map_x': float(map_x), 'map_y': float(map_y)}
+    return {'colour': colour, 'photo_x': float(photo_x), 'photo_y': float(photo_y),
+            'radius': float(radius), 'map_x': float(map_x), 'map_y': float(map_y),
+            'visible': float(visible)}
 
-def split_blob_by_colour(image_hsv, xs, ys, expected_radius, at_edge, blob_near_pocket, to_map):
+def colour_at(image_hsv, centre_x, centre_y, radius, family):
     """
-    Splits one merged or odd-shapped blob into balls.
-
-    Inputs
-    - image_hsv : the photo in HSV
-    - xs, ys : pixel coordinates of the blob
-    - expected_radius : how big a ball should look here, in photo pixels
-    - at_edge : True if this blob is a bite out of the cloth outline
-    - blob_near_pocket : True if the blob sits at a 
-    Output 
-    - a list of ball records 
+    Checks the colour in a disc round a candidate centre. 
+    inputs: 
+    - image_hsv: the frame in HSV
+    - centre_x, centre_y, radius: the disc (about half the ball radius)
+    - family: the mask the centre came from ('red', 'yellow' ...)
+    Output:
+    - 'red', 'yellow', 'cue', 'black', or None if the disc does not hold enough colour 
     """
+    image_height, image_width = image_hsv.shape[:2]
+    y0 = max(0, int(centre_y - radius))
+    y1 = min(image_height, int(centre_y + radius) + 1)
+    x0 = max(0, int(centre_x - radius))
+    x1 = min(image_width, int(centre_x + radius) + 1)
+    ys, xs = np.mgrid[y0:y1, x0:x1]
+    inside = (xs - centre_x) ** 2 + (ys - centre_y) ** 2 <= radius * radius
 
-    balls = []
-    expected_area = np.pi * expected_radius * expected_radius
-    labels = ball_colour.label_pixels(image_hsv[ys, xs])
+    labels = ball_colour.label_pixels(image_hsv[ys[inside], xs[inside]])
+    white_fraction = np.mean(labels == ball_colour.WHITE)
+    dark_fraction = np.mean(labels == ball_colour.DARK)
+    red_fraction = np.mean(labels == ball_colour.RED)
+    yellow_fraction = np.mean(labels == ball_colour.YELLOW)
 
-    if at_edge:
-        colours_to_try = [ball_colour.RED, ball_colour.YELLOW]
-    else:
-        colours_to_try = [ball_colour.WHITE, ball_colour.DARK, ball_colour.RED, ball_colour.YELLOW]
+    if family == 'red':
+        return 'red' if red_fraction > config.MIN_COLOUR_FRACTION else None
+    if family == 'yellow':
+        return 'yellow' if yellow_fraction > config.MIN_COLOUR_FRACTION else None
+    if white_fraction + dark_fraction < config.MIN_COLOUR_FRACTION:
+        return None
+    if white_fraction > dark_fraction:
+        return 'cue'
+    return 'black'
 
-    for colour_label in colours_to_try:
-        # Draw only this colour's pixels, then find the separate groups of them.
-        colour_mask = np.zeros(image_hsv.shape[:2], dtype=np.uint8)
-        colour_mask[ys[labels == colour_label], xs[labels == colour_label]] = 1
-        group_count, group_image, group_stats, _ = cv2.connectedComponentsWithStats(colour_mask)
+def find_centres(colour_mask, radius, to_map, offset_x, offset_y):
+    """
+    Finds the ball centers in one colour mask. 
+    Inputs:
+    - colour_mask: 0/1 image of one colour inside one blob (crop of the frame)
+    - radius: expected ball radius here, in photo pixels 
+    - to_map: photo -> map matrix 
+    - offset_x, offset_y: where the crop sits in the full frame 
+    Output: 
+    - List of (x, y, peak_height) in full-frame pixels. peak_height is how far the centre is from the edge 
+    of its colour patch. About the radius of a whole ball, less for a sliver. 
 
-        for group in range(1, group_count):
-            area = group_stats[group][4]
-            if area < 0.4 * expected_area:
-                continue                                  # a highlight or a shadow, not a ball
+    distanceTransform used here to give every pixel its distance to the edge of the patch. A ball is a round 
+    patch, thus its centre is a peak of that distance. Peaks are taken strongest first, a weaker peak is thrown away if it
+    belongs to a ball already found. 
+    """
+    distance = cv2.distanceTransform(colour_mask, cv2.DIST_L2, 5)
+    if distance.max() < config.PEAK_MIN_RATIO * radius:
+        return []
 
-            group_mask = (group_image == group).astype(np.uint8)
+    # A pixel is a peak if it equals the largest value in the 5 x 5 square round it.
+    neighbourhood_max = cv2.dilate(distance, np.ones((5, 5), np.uint8))
+    is_peak = (distance == neighbourhood_max) & (distance > config.PEAK_MIN_RATIO * radius)
+    peak_ys, peak_xs = np.nonzero(is_peak)
+    strongest_first = np.argsort(-distance[peak_ys, peak_xs])
 
-            # distanceTransform gives, for every pixel, its distance to the edge of the group.
-            # Its largest value is the radius of the biggest circle that fits inside.
-            distance_to_edge = cv2.distanceTransform(group_mask, cv2.DIST_L2, 5)
-            if distance_to_edge.max() < 0.5 * expected_radius:
-                continue                                  # too thin to be a ball
+    kept = []           # each entry: (x, y, height, map_x, map_y)
+    for index in strongest_first:
+        x = int(peak_xs[index]) + offset_x
+        y = int(peak_ys[index]) + offset_y
+        height = float(distance[peak_ys[index], peak_xs[index]])
+        map_x, map_y = move_point(to_map, x, y)
 
-            if colour_label == ball_colour.DARK and blob_near_pocket:
-                continue                                  # dark at a pocket is the pocket
-            if colour_label == ball_colour.WHITE and area > config.MAX_SINGLE_BALL_AREA_RATIO * expected_area:
-                continue                                  # there is only one cue ball
+        same_ball = False
+        for kept_x, kept_y, kept_height, kept_map_x, kept_map_y in kept:
+            map_distance = np.hypot(map_x - kept_map_x, map_y - kept_map_y)
+            if map_distance < config.SAME_BALL_ON_MAP * config.BALL_RADIUS_ON_MAP:
+                same_ball = True
+                break
+            both_slivers = height < config.WEAK_PEAK_RATIO * radius and kept_height < config.WEAK_PEAK_RATIO * radius
+            if both_slivers and np.hypot(x - kept_x, y - kept_y) < config.SAME_SLIVER_IN_PHOTO * radius:
+                same_ball = True                      # a thin sliver gives two peaks along its ridge
+                break
+        if not same_ball:
+            kept.append((x, y, height, map_x, map_y))
 
-            # How many balls are in this group? Two estimates, take the larger.
-            #   1. By area: total area divided by the area of one ball.
-            #   2. By centres: keep only pixels deep inside the group. Each ball leaves
-            #      its own island, so count the islands.
-            count_by_area = int(round(area / (0.92 * expected_area)))
-            deep_inside = (distance_to_edge > 0.6 * expected_radius).astype(np.uint8)
-            island_count, _ = cv2.connectedComponents(deep_inside)
-            count_by_centres = island_count - 1           # minus one for the background
-            ball_count = max(1, count_by_area, count_by_centres)
+    return [(x, y, height) for x, y, height, _, _ in kept]
 
-            group_ys, group_xs = np.nonzero(group_mask)
-            colour_name = ball_colour.LABEL_NAMES[colour_label]
 
-            if ball_count == 1:
-                balls.append(make_ball(colour_name, group_xs, group_ys, to_map))
-            else:
-                # k-means on the pixel positions cuts the group into ball_count compact pieces.
-                positions = np.column_stack([group_xs, group_ys])
-                kmeans = KMeans(n_clusters=ball_count, n_init=5, random_state=0).fit(positions)
-                for piece in range(ball_count):
-                    in_piece = kmeans.labels_ == piece
-                    balls.append(make_ball(colour_name, group_xs[in_piece], group_ys[in_piece], to_map))
-    return balls
+def shift_sliver_inward(x, y, peak_height, radius, cloth_mask):
+    """
+    Moves the center of a sliver to where the ball centre really is. 
+
+    The peak of a sliver sits in the middle of the visible part, peak_height away from the 
+    cloth on the outside. ball centre is (radius - peak_height) further in, straight away from 
+    the nearest cloth pixel. Whole balls, and slivers boxed in by other balls, are left alone. 
+    """
+    if peak_height >= config.WEAK_PEAK_RATIO * radius:
+        return x, y
+
+    reach = int(1.5 * radius)
+    y0, y1 = max(0, y - reach), min(cloth_mask.shape[0], y + reach + 1)
+    x0, x1 = max(0, x - reach), min(cloth_mask.shape[1], x + reach + 1)
+    cloth_ys, cloth_xs = np.nonzero(cloth_mask[y0:y1, x0:x1])
+    if len(cloth_ys) == 0:
+        return x, y
+
+    distances = np.hypot(cloth_xs + x0 - x, cloth_ys + y0 - y)
+    nearest = np.argmin(distances)
+    if distances[nearest] > reach:
+        return x, y
+
+    away_x = x - (cloth_xs[nearest] + x0)
+    away_y = y - (cloth_ys[nearest] + y0)
+    length = np.hypot(away_x, away_y)
+    if length < 1:
+        return x, y
+    step = radius - peak_height
+    return int(round(x + step * away_x / length)), int(round(y + step * away_y / length))
 
 
 def find_balls(image_hsv, cloth_mask, table_contour, table_hull, to_map, to_photo):
     """
-    Inputs 
-    - image_hsv, cloth_mask : from find_cloth_mask()
-    - table_contour, table_hull : from find_table_outline()
-    - to_map, to_photo : from make_map_transform()
+    Inputs
+        image_hsv, cloth_mask : from table_mask
+        table_contour, table_hull : from find_table_outline
+        to_map, to_photo : from make_map_transform
     Output
-    - balls : a list of records, one per ball, each with colour, 
-        photo_x, photo_y, radius, map_x, map_y
+        balls : a list of records, one per ball, each with
+                colour, photo_x, photo_y, radius, map_x, map_y, visible
     """
-
     image_height, image_width = cloth_mask.shape
 
     # Two filled shapes: the exact cloth outline, and the hull stretched round it.
@@ -142,15 +183,12 @@ def find_balls(image_hsv, cloth_mask, table_contour, table_hull, to_map, to_phot
     hull_region = np.zeros((image_height, image_width), dtype=np.uint8)
     cv2.fillConvexPoly(hull_region, table_hull, 255)
 
-    not_cloth = cv2.bitwise_not(cloth_mask)
-
+    small_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
     # Holes: inside the cloth outline but not cloth-coloured. These are balls on the bed.
-    holes = cv2.bitwise_and(cloth_region, not_cloth)
+    holes = cv2.bitwise_and(cloth_region, cv2.bitwise_not(cloth_mask))
+    holes = cv2.morphologyEx(holes, cv2.MORPH_OPEN, small_kernel)
     # Bites: inside the hull but outside the cloth outline. Pockets, rails, and balls on a cushion.
     bites = cv2.bitwise_and(hull_region, cv2.bitwise_not(cloth_region))
-
-    small_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-    holes = cv2.morphologyEx(holes, cv2.MORPH_OPEN, small_kernel)
     bites = cv2.morphologyEx(bites, cv2.MORPH_OPEN, small_kernel)
 
     balls = []
@@ -158,47 +196,78 @@ def find_balls(image_hsv, cloth_mask, table_contour, table_hull, to_map, to_phot
         blob_count, blob_image, blob_stats, blob_centres = cv2.connectedComponentsWithStats(mask)
 
         for blob in range(1, blob_count):
-            area = blob_stats[blob][4]
+            left, top, width, height, area = blob_stats[blob]
             if area < 40:
                 continue
 
             centre_x, centre_y = blob_centres[blob]
             expected_radius = ball_radius_in_photo(to_map, to_photo, centre_x, centre_y)
             expected_area = np.pi * expected_radius * expected_radius
-
             if area < config.MIN_AREA_RATIO * expected_area:
                 continue                                  # too small
+            if at_edge and area > config.MAX_EDGE_BLOB_AREA_RATIO * expected_area:
+                continue                                  # a pocket or a length of rail
 
             blob_mask = (blob_image == blob).astype(np.uint8)
-            thickness = cv2.distanceTransform(blob_mask, cv2.DIST_L2, 5).max()
+            # thickness = cv2.distanceTransform(blob_mask, cv2.DIST_L2, 5).max()
+            # if thickness < config.MIN_THICKNESS_RATIO * expected_radius:
+            #     continue                                  # too thin: cue stick, seam or rail sliver
+
+            # Work on a crop round the blob (a bit bigger than the blob) to keep it quick.
+            pad = int(expected_radius) + 2
+            y0, y1 = max(0, top - pad), min(image_height, top + height + pad)
+            x0, x1 = max(0, left - pad), min(image_width, left + width + pad)
+            blob_crop = blob_mask[y0:y1, x0:x1]
+
+            thickness = cv2.distanceTransform(blob_crop, cv2.DIST_L2, 5).max()
             if thickness < config.MIN_THICKNESS_RATIO * expected_radius:
                 continue                                  # too thin: cue stick, seam or rail sliver
 
-            ys, xs = np.nonzero(blob_mask)
-            map_x, map_y = move_point(to_map, centre_x, centre_y)
-            near_pocket = is_near_pocket(map_x, map_y)
+            crop_pixels = image_hsv[y0:y1, x0:x1].reshape(-1, 3)
+            labels = ball_colour.label_pixels(crop_pixels).reshape(blob_crop.shape)
 
-            # Roundness = 4 * pi * area / perimeter^2. It is 1 for a circle and
-            # drops towards 0 for long or ragged shapes.
-            outlines, _ = cv2.findContours(blob_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            perimeter = cv2.arcLength(max(outlines, key=cv2.contourArea), True)
-            roundness = 4 * np.pi * area / (perimeter * perimeter + 1e-9)
+            kernel_size = max(3, int(config.CLOSE_KERNEL_RATIO * expected_radius)) | 1
+            close_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
 
-            looks_like_one_ball = (not at_edge) \
-                and area <= config.MAX_SINGLE_BALL_AREA_RATIO * expected_area \
-                and roundness >= config.MIN_ROUNDNESS
+            families = [('red', labels == ball_colour.RED),
+                        ('yellow', labels == ball_colour.YELLOW),
+                        ('darkwhite', (labels == ball_colour.DARK) | (labels == ball_colour.WHITE))]
+            if at_edge:
+                families = families[:2]                   # pockets and rails are dark too
 
-            if looks_like_one_ball:
-                colour = ball_colour.classify_ball(image_hsv[ys, xs])
-                if colour == 'unknown':
-                    continue
-                if colour == 'black' and near_pocket:
-                    continue                              # a pocket opening, not the black ball
-                balls.append(make_ball(colour, xs, ys, to_map))
-            else:
-                pieces = split_blob_by_colour(image_hsv, xs, ys, expected_radius,
-                                              at_edge, at_edge or near_pocket, to_map)
-                for piece in pieces:
-                    balls.append(piece)
+            for family, family_pixels in families:
+                colour_mask = (family_pixels & (blob_crop > 0)).astype(np.uint8)
+                colour_mask = cv2.morphologyEx(colour_mask, cv2.MORPH_CLOSE, close_kernel)
 
-    return balls
+                for x, y, peak_height in find_centres(colour_mask, expected_radius, to_map, x0, y0):
+                    # The colour is checked at the peak, before any shift, so a hidden ball is
+                    # not judged on the pixels of the ball in front of it.
+                    colour = colour_at(image_hsv, x, y, 0.55 * expected_radius, family)
+                    if colour is None:
+                        continue
+                    x, y = shift_sliver_inward(x, y, peak_height, expected_radius, cloth_mask)
+                    map_x, map_y = move_point(to_map, x, y)
+
+                    on_the_map = -0.03 * config.MAP_WIDTH < map_x < 1.03 * config.MAP_WIDTH \
+                        and -0.06 * config.MAP_HEIGHT < map_y < 1.06 * config.MAP_HEIGHT
+                    if not on_the_map:
+                        continue
+                    if colour == 'black' and is_at_pocket_mouth(map_x, map_y):
+                        continue                          # a pocket opening, not the black ball
+                    balls.append(make_ball(colour, x, y, expected_radius, to_map, peak_height / expected_radius))
+
+    # Last tidy-up across blobs: the same colour closer than 1.5 radii on the map, or any
+    # colour closer than half a radius, is one ball. The first one found is kept.
+    tidy = []
+    for ball in balls:
+        duplicate = False
+        for other in tidy:
+            distance = np.hypot(ball['map_x'] - other['map_x'], ball['map_y'] - other['map_y'])
+            same_colour = ball['colour'] == other['colour']
+            if distance < 0.5 * config.BALL_RADIUS_ON_MAP \
+                    or (same_colour and distance < config.SAME_BALL_ON_MAP * config.BALL_RADIUS_ON_MAP):
+                duplicate = True
+                break
+        if not duplicate:
+            tidy.append(ball)
+    return tidy
