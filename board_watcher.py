@@ -13,6 +13,7 @@ turn over.
 
 import config
 import run_video
+import table_mask
 
 POCKET_SHORT_NAMES = {'top-left': 'TL', 'top-middle': 'TM', 'top-right': 'TR',
                       'bottom-left': 'BL', 'bottom-middle': 'BM', 'bottom-right': 'BR'}
@@ -77,7 +78,7 @@ class BoardWatcher:
 
     def calibrate(self, frame, click=None):
         """Find the table (again). Keeps the game's last board state."""
-        self.click_x, self.click_y = run_video.find_click(frame, click)
+        self.click_x, self.click_y = table_mask.find_cloth_center(frame)
         self.reference = run_video.make_reference(frame, self.click_x, self.click_y)
         self.detector = {'state': 'SETTLED', 'still_count': 0, 'blocked': False, 'readable': False}
         self.previous_gray = None
