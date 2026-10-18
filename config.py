@@ -55,6 +55,7 @@ HOLD_FRAMES = 15                  # still for this many frames in a row before t
 OCCLUDER_BIG_FRACTION = 0.024     # a non-cloth lump bigger than this is a person, arm or cue
 OCCLUDER_EDGE_FRACTION = 0.012    # ... or bigger than this and touching the table edge (arms come in from outside)
 READ_EVERY = 15                   # frames between two readings of the board (0.5 s at 30 fps)
+
 AGREE_TOLERANCE = 1.0             # two readings agree if every ball is within this many map radii
 WINDOW_BASE_RADII = 3.0     # search window half-size for a found ball, in ball radii
 WINDOW_SPEED_FACTOR = 1.5   # extra half-size per map px the ball is expected to move this frame
@@ -69,3 +70,9 @@ NO_MATCH = 1e6              # cost for a pairing outside a ball's window
 POCKETS = {'top-left': (0, 0), 'top-middle': (MAP_WIDTH / 2, 0), 'top-right': (MAP_WIDTH, 0),
            'bottom-left': (0, MAP_HEIGHT), 'bottom-middle': (MAP_WIDTH / 2, MAP_HEIGHT),
            'bottom-right': (MAP_WIDTH, MAP_HEIGHT)}
+
+AGREE_TOLERANCE = 1.0             # two readings agree if every ball is within this many map radii
+# Game rules and scoring (game_state.py, board_watcher.py)
+BALLS_PER_COLOUR = 7              # blackball pool: 7 red, 7 yellow, 1 black, 1 cue
+FOUL_GIVES_TWO_VISITS = True      # after a foul the other player gets two visits (pub rules)
+
