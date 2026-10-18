@@ -15,6 +15,7 @@ Usage
     python gui.py --video game.mp4         a recorded game
     python gui.py --photos "Table images"  step through still photos (space = next)
     python gui.py --players Ben Natalie    player names
+    python gui.py --video game.mp4 --speed 2   play a recording at twice real time
 
 Keys
     q / esc   quit                         space   pause (photos: next photo)
@@ -196,7 +197,10 @@ def render(frame, watcher, game, truth_log, message=''):
 # ---------------------------------------------------------------- main loop
 
 def open_source(args):
-    """Returns a function that gives the next frame (or None when finished)."""
+    """
+    Returns a function that gives the next frame (or None when finished), and the
+    frame rate to play at (None = as fast as possible: photos and live cameras).
+    """
     if args.photos:
         names = sorted(n for n in os.listdir(args.photos)
                        if n.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp')))
@@ -206,7 +210,7 @@ def open_source(args):
             if not paths:
                 return None
             return cv2.imread(paths.pop(0))
-        return next_photo
+        return next_photo, None
 
     capture = cv2.VideoCapture(args.video if args.video else args.camera)
     if not capture.isOpened():
@@ -215,7 +219,13 @@ def open_source(args):
     def next_frame():
         ok, frame = capture.read()
         return frame if ok else None
-    return next_frame
+
+    # A recorded video is played at its real speed (times --speed), so ground truth can
+    # be typed in while watching. Processing runs faster than real time, so it keeps up.
+    play_fps = None
+    if args.video:
+        play_fps = (capture.get(cv2.CAP_PROP_FPS) or 30.0) * args.speed
+    return next_frame, play_fps
 
 
 def main():
@@ -224,11 +234,13 @@ def main():
     parser.add_argument('--video')
     parser.add_argument('--photos')
     parser.add_argument('--players', nargs=2, default=['Player 1', 'Player 2'])
+    parser.add_argument('--speed', type=float, default=1.0,
+                        help='video playback speed, e.g. 2 = twice real time')
     parser.add_argument('--click', nargs=2, type=int, metavar=('X', 'Y'),
                         help='a pixel on bare cloth in the first frame')
     args = parser.parse_args()
 
-    next_frame = open_source(args)
+    next_frame, play_fps = open_source(args)
     photo_mode = args.photos is not None
 
     frame = next_frame()
@@ -242,6 +254,7 @@ def main():
     message = ''
     paused = False
     first = True
+    next_show_time = time.time()
 
     cv2.namedWindow('Pool', cv2.WINDOW_NORMAL)
 
@@ -281,7 +294,12 @@ def main():
 
         cv2.imshow('Pool', render(frame, watcher, game, truth_log, message))
 
-        key = cv2.waitKey(1 if not paused else 30) & 0xFF
+        # Hold each video frame until its time comes, so the video plays at real speed.
+        wait_ms = 30 if paused else 1
+        if play_fps and not paused:
+            next_show_time = max(next_show_time + 1.0 / play_fps, time.time() - 0.5)
+            wait_ms = max(1, int((next_show_time - time.time()) * 1000))
+        key = cv2.waitKey(wait_ms) & 0xFF
         if key in (ord('q'), 27):
             break
         elif key == ord(' '):
