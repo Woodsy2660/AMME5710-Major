@@ -1,41 +1,10 @@
 """
 Run ball detection and the game-state tracker on an mp4 video.
 
-Structure: 
+How to run: python run_video.py "path/to/video.mp4"
 
-Do not follow balls while they move: read the board only when the tbale is still and 
-no obstruction, keep a state only when two readings half a second apart agree. Get all the events 
-(ball potted, cue ball back on table) from the difference between consecutive states.
+Output:<name>_tracked.mp4       every frame with the last committed state drawn, plus a status line
 
-Project Requirements/limitations:
-
-- Phone is on tripod and not moved during the game: first frame shows whole table with no obstruction 
-- Phone is at least 30 degreens above the cloth (atleast 1.2m about the height of table)
-- Game starts with a full rack: 1 cue, 1 black, 7 red, 7 yellow 
-- Reds are interchangeable and so are yellows: events are per-colour counts, and the pocket named for
-a pot is the one nearest to where the ball was last seen. 
-
-How to run:
-
-    python run_video.py "path/to/video.mp4"
-        cloth pixel found automatically (run_photo.find_cloth_center on the first frame)
-    python run_video.py video.mp4 --click 700 700          give the cloth pixel yourself
-    python run_video.py video.mp4 --start 300 --end 2100   frame range
-    python run_video.py video.mp4 --output results/game.mp4
-    python run_video.py video.mp4 --no-video               skip the output video
-    python run_video.py video.mp4 --show                   live preview, q to stop
-
-Output:
-    <name>_tracked.mp4       every frame with the last committed state drawn, plus a status line
-    <name>_state_N.jpg       one picture per committed board state (overlay + top-down map)
-    <name>_events.txt        the committed states and what changed between them
-
-Frame by frame:
-    1. moving_pixels     how much changed inside the table since the last frame   (half-size frame)
-    2. view_is_blocked   is there a person / arm / cue over the table?            (half-size frame)
-    3. update_detector   SHOT or SETTLED; readable = settled, still for HOLD_FRAMES, not blocked
-    4. if readable, every READ_EVERY frames: read_board; two readings agree -> commit the state
-    5. events_between the last two committed states
 """
 
 import argparse
@@ -51,24 +20,7 @@ import top_down
 import ball_detection
 import draw
 import top_down
-
-# ---------------------------------------------------------------------------
-# Set-up from the first frame
-# ---------------------------------------------------------------------------
-
-def find_click(first_frame, click_argument):
-    """
-    The cloth pixel: from the command line, else run_photo's automatic finder, else the frame centre.
-    """
-    if click_argument is not None:
-        return click_argument[0], click_argument[1]
-    try:
-        from run_photo import find_cloth_center
-        return find_cloth_center(first_frame)
-    except ImportError:
-        height, width = first_frame.shape[:2]
-        return width // 2, int(height * 0.6)
-
+from update_game_state import initialise_tracking, track_frame
 
 def shrink_to_gray(frame_bgr):
     """
@@ -102,10 +54,11 @@ def make_reference(first_frame, click_x, click_y):
     cv2.fillConvexPoly(hull_small, np.round(table_hull * scale).astype(np.int32), 255)
     inner_small = cv2.erode(hull_small, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15)))
     edge_small = cv2.subtract(inner_small, cv2.erode(inner_small, np.ones((7, 7), np.uint8)))
-
+    hull_mask = np.zeros(first_frame.shape[:2], dtype=np.uint8)
+    cv2.fillConvexPoly(hull_mask, table_hull, 255)    
     return {'cloth_colour': cloth_colour, 'table_hull': table_hull, 'corners': corners,
             'to_map': to_map, 'to_photo': to_photo, 'inner_small': inner_small, 'edge_small': edge_small,
-            'table_area_small': int(np.count_nonzero(hull_small))}
+            'table_area_small': int(np.count_nonzero(hull_small)), 'hull_mask': hull_mask}
 
 
 # ---------------------------------------------------------------------------
@@ -306,10 +259,6 @@ def main():
     parser.add_argument('--show', action='store_true', help='live preview (press q to stop)')
     arguments = parser.parse_args()
 
-    os.makedirs('results', exist_ok=True)
-    name = os.path.splitext(os.path.basename(arguments.video))[0]
-    output_path = arguments.output or os.path.join('results', name + '_tracked.mp4')
-
     video = cv2.VideoCapture(arguments.video)
     fps = video.get(cv2.CAP_PROP_FPS) or 30.0
     if arguments.start > 0:
@@ -319,98 +268,102 @@ def main():
         print('Could not read', arguments.video)
         return
 
-    click_x, click_y = find_click(frame, arguments.click)
+    # One time set up 
+    click_x, click_y = table_mask.find_cloth_center(frame)
     reference = make_reference(frame, click_x, click_y)
-    print('Cloth click:', click_x, click_y, '  corners:', reference['corners'].astype(int).tolist())
+    print('thresholds: low %d  high %d' % (config.MOVE_LOW_FRACTION * reference['table_area_small'],
+                                       config.MOVE_HIGH_FRACTION * reference['table_area_small']))
 
+    os.makedirs('results', exist_ok=True)
+    name = os.path.splitext(os.path.basename(arguments.video))[0]
+    output_path = arguments.output or os.path.join('results', name + '_tracked.mp4')
+    writer = None
+
+    # What the loop remember from one frame to the next
     detector = {'state': 'SETTLED', 'still_count': 0, 'blocked': False, 'readable': False}
     previous_gray = None
     previous_reading = None          # the last reading in the current readable window
-    frames_since_reading = config.READ_EVERY
-    window_committed = False
-    states = []                      # committed board states: (frame, time, balls)
-    event_lines = []
-    writer = None
+    board = None
+    tracks = None
+    first_hit = None
     frame_index = arguments.start
 
-    while True:
+    while ok:
         if arguments.end is not None and frame_index > arguments.end:
             break
-        time = frame_index / fps
+        t = frame_index / fps
 
-        # 1-3. still? clear? readable?
+        # Checks if the table still or if a shot is occuring
+        # Counts pixels that changed since the last frame and update SHOT / SETTLED state machine
         gray = shrink_to_gray(frame)
         moving = moving_pixels(gray, previous_gray, reference)
         previous_gray = gray
-        # readable = update_detector(detector, moving, view_is_blocked(frame, reference), reference)
-        readable = update_detector(detector, moving, False, reference)
 
-        # 4. read the board when readable, commit when two readings agree (once per window)
+        was_shot = detector['state'] == 'SHOT'
+        readable = update_detector(detector, moving, False, reference)
+        is_shot = detector['state'] == 'SHOT'
+
+        # If shot has just started - give every ball from the last committed state a track
+        if is_shot and not was_shot and board is not None:
+            tracks = initialise_tracking(board, t)
+            first_hit = None
+            print('%6.1f s  shot started' % t)
+
+        # During a shot - follow every ball frame by frame
+        if is_shot and tracks is not None:
+            _, events = track_frame(tracks, frame, t, 1.0 / fps, reference)
+            for event in events:
+                print('%6.1f s    %s' % (t, event))
+            # if first_hit is None:
+            #     first_hit = first_contact(tracks)
+
+        # Shot ends - stop tracking
+        if was_shot and not is_shot and tracks is not None:
+            print('%6.1f s  shot over, first ball hit: %s' % (t, first_hit))
+            tracks = None
+
+        # When the table is still, read the board every READ_EVERY frames
+        # Commit a reading if it agrees with the previous reading in the same readable window 
+        # and something has changed since the last committed state
         if not readable:
             previous_reading = None
-            window_committed = False
-            frames_since_reading = config.READ_EVERY
-        elif not window_committed:
-            frames_since_reading = frames_since_reading + 1
-            if frames_since_reading >= config.READ_EVERY:
-                frames_since_reading = 0
-                detector['blocked'] = view_is_blocked(frame, reference)
-                if detector['blocked']:
-                    previous_reading = None
-                else:
-                    reading = read_board(frame, reference, click_x, click_y)
-                    if previous_reading is not None and same_reading(previous_reading, reading):
-                        states.append((frame_index, time, reading))
-                        window_committed = True
-                        title = 'state %d  t = %.1f s  %s' % (len(states), time, counts_text(count_colours(reading)))
-                        print(title)
-                        overlay = draw.draw_overlay(frame, reference['table_hull'], reference['corners'], reading)
-                        cv2.imwrite(os.path.join('results', '%s_state_%d.jpg' % (name, len(states))),
-                                    draw_status(side_by_side(overlay, reading), [title]))
-                        # 5. events
-                        if len(states) >= 2:
-                            found = events_between(states[-2][2], reading)
-                            line = '%.1f s -> %.1f s : %s' % (states[-2][1], time, '; '.join(found) if found else 'no change')
-                            print('   ', line)
-                            event_lines.append(line)
-                    previous_reading = reading
-
-        # Output video and preview: the LAST COMMITTED state drawn on the current frame.
-        if not arguments.no_video or arguments.show:
-            last_balls = states[-1][2] if states else []
-            what = 'SHOT' if detector['state'] == 'SHOT' else ('view blocked' if detector['blocked'] else ('reading' if readable else 'settling'))
-            status = 't = %5.1f s   %-13s' % (time, what)
-            if states:
-                status = status + '   state %d (%.1f s): %s' % (len(states), states[-1][1], counts_text(count_colours(last_balls)))
-            picture = draw_status(side_by_side(draw.draw_overlay(frame, reference['table_hull'], reference['corners'], last_balls), last_balls), [status])
-            if not arguments.no_video:
-                if writer is None:
-                    writer = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (picture.shape[1], picture.shape[0]))
-                writer.write(picture)
-            if arguments.show:
-                cv2.imshow('pool tracker', picture)
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    break
+            # window_committed = False
+            # frames_since_reading = config.READ_EVERY
+        elif frame_index % config.READ_EVERY == 0 and not view_is_blocked(frame, reference):
+            reading = read_board(frame, reference, click_x, click_y)
+            trusted = previous_reading is not None and same_reading(previous_reading, reading)
+            changed = board is None or not same_reading(board, reading)
+            if trusted and changed:
+                if board is not None:
+                    for event in events_between(board, reading):
+                        print('%6.1f s    %s' % (t, event))
+                board = reading
+                print('%6.1f s  board committed: %s' % (t, counts_text(count_colours(board))))
+            previous_reading = reading
+ 
+        if tracks is not None:
+            map_balls = [{'colour': track['colour'], 'map_x': track['x'], 'map_y': track['y']}
+                         for track in tracks.values() if not track['lost']]
+        else:
+            map_balls = board or []
+        overlay = draw.draw_overlay(frame, reference['table_hull'], reference['corners'], board or [])
+        picture = draw_status(side_by_side(overlay, map_balls), ['t = %.1f s   %s' % (t, detector['state'])])
+ 
+        if writer is None:
+            writer = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*'mp4v'), fps,
+                                     (picture.shape[1], picture.shape[0]))
+        writer.write(picture)
 
         ok, frame = video.read()
         if not ok:
             break
         frame_index = frame_index + 1
         if frame_index % 300 == 0:
-            print('  ... %.0f s' % time)
+            print('  ... %.0f s' % t)
 
     video.release()
     if writer is not None:
         writer.release()
-    if arguments.show:
-        cv2.destroyAllWindows()
-
-    with open(os.path.join('results', name + '_events.txt'), 'w') as file:
-        for number, (frame_number, time, balls) in enumerate(states, start=1):
-            file.write('state %d at %.1f s: %s\n' % (number, time, counts_text(count_colours(balls))))
-        file.write('\n' + '\n'.join(event_lines) + '\n')
-    print('\n%d states committed. Results in results/' % len(states))
-
 
 if __name__ == '__main__':
     main()
