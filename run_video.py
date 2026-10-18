@@ -9,26 +9,11 @@ Output:<name>_tracked.mp4       every frame with the last committed state drawn,
 
 import argparse
 import os
-
 import cv2
 import numpy as np
-
-import config
-import table_mask
-import table_corners
-import top_down
-import ball_detection
-import draw
-import top_down
-from update_game_state import initialise_tracking, track_frame
-
-def shrink_to_gray(frame_bgr):
-    """
-    The frame at SIGNAL_SCALE, in grey, lightly blurred. Used for the moving-pixels test.
-    """
-    small = cv2.resize(frame_bgr, None, fx=config.SIGNAL_SCALE, fy=config.SIGNAL_SCALE, interpolation=cv2.INTER_AREA)
-    return cv2.GaussianBlur(cv2.cvtColor(small, cv2.COLOR_BGR2GRAY), (5, 5), 0)
-
+import config, table_mask, table_corners, top_down, ball_detection, draw
+from shot_detection import shrink_to_gray, moving_pixels, view_is_blocked, update_detector
+from ball_tracking import initialise_tracking, track_frame, closest_pocket
 
 def make_reference(first_frame, click_x, click_y):
     """
@@ -60,77 +45,6 @@ def make_reference(first_frame, click_x, click_y):
             'to_map': to_map, 'to_photo': to_photo, 'inner_small': inner_small, 'edge_small': edge_small,
             'table_area_small': int(np.count_nonzero(hull_small)), 'hull_mask': hull_mask}
 
-
-# ---------------------------------------------------------------------------
-# Per-frame tests: is the table still, is the view clear?
-# ---------------------------------------------------------------------------
-
-def moving_pixels(gray_small, previous_gray_small, reference):
-    """
-    How many pixels inside the table changed since the last frame (balls rolling, cue, arms).
-    """
-    if previous_gray_small is None:
-        return 0
-    difference = cv2.absdiff(gray_small, previous_gray_small)
-    return int(np.count_nonzero((difference > config.MOVING_PIXEL_DIFF) & (reference['inner_small'] > 0)))
-
-
-def view_is_blocked(frame_bgr, reference):
-    """
-    True if something other than balls is over the table.
-    The biggest non-cloth lump inside the table is measured: a ball cluster is small and sits in
-    the middle; a person, an arm or a cue is big, and always comes in from the table edge.
-    """
-    small = cv2.resize(frame_bgr, None, fx=config.SIGNAL_SCALE, fy=config.SIGNAL_SCALE, interpolation=cv2.INTER_AREA)
-    _, cloth_small = table_mask.find_cloth_mask(small, 0, 0, reference['cloth_colour'])
-    not_cloth = cv2.bitwise_and(reference['inner_small'], cv2.bitwise_not(cloth_small))
-    not_cloth = cv2.morphologyEx(not_cloth, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
-
-    lump_count, lump_image, lump_stats, _ = cv2.connectedComponentsWithStats(not_cloth)
-    if lump_count <= 1:
-        return False
-    biggest = 1 + int(np.argmax(lump_stats[1:, 4]))
-    area = int(lump_stats[biggest, 4])
-    touches_edge = bool(np.any((lump_image == biggest) & (reference['edge_small'] > 0)))
-
-    big = config.OCCLUDER_BIG_FRACTION * reference['table_area_small']
-    edge = config.OCCLUDER_EDGE_FRACTION * reference['table_area_small']
-    return area > big or (area > edge and touches_edge)
-
-
-def update_detector(detector, moving, blocked, reference):
-    """
-    The SHOT / SETTLED state machine, kept in a plain dictionary.
-        moving pixels above MOVE_HIGH  -> SHOT, still-counter restarts
-        moving pixels below MOVE_LOW   -> still-counter + 1
-        in between                     -> still-counter restarts (a ball slowing down)
-        SHOT becomes SETTLED once the still-counter reaches HOLD_FRAMES
-    Returns True if the board may be read from this frame.
-    Two thresholds instead of one stop the state flickering while a ball slows down.
-    """
-    move_high = config.MOVE_HIGH_FRACTION * reference['table_area_small']
-    move_low = config.MOVE_LOW_FRACTION * reference['table_area_small']
-
-    if moving > move_high:
-        detector['state'] = 'SHOT'
-        detector['still_count'] = 0
-    elif moving < move_low:
-        detector['still_count'] = detector['still_count'] + 1
-    else:
-        detector['still_count'] = 0
-
-    if detector['state'] == 'SHOT' and detector['still_count'] >= config.HOLD_FRAMES:
-        detector['state'] = 'SETTLED'
-
-    detector['blocked'] = blocked
-    detector['readable'] = detector['state'] == 'SETTLED' and detector['still_count'] >= config.HOLD_FRAMES and not blocked
-    return detector['readable']
-
-
-# ---------------------------------------------------------------------------
-# Reading the board and trusting a reading
-# ---------------------------------------------------------------------------
-
 def read_board(frame_bgr, reference, click_x, click_y):
     """
     The ball list for one full-size frame, using the corners stored in the reference.
@@ -138,7 +52,6 @@ def read_board(frame_bgr, reference, click_x, click_y):
     image_hsv, cloth_mask = table_mask.find_cloth_mask(frame_bgr, click_x, click_y, reference['cloth_colour'])
     table_contour, table_hull = table_mask.find_table_outline(cloth_mask, click_x, click_y)
     return ball_detection.find_balls(image_hsv, cloth_mask, table_contour, table_hull, reference['to_map'], reference['to_photo'])
-
 
 def count_colours(balls):
     """
@@ -148,7 +61,6 @@ def count_colours(balls):
     for ball in balls:
         counts[ball['colour']] = counts[ball['colour']] + 1
     return counts
-
 
 def match_balls(balls_a, balls_b, tolerance):
     """
@@ -171,31 +83,15 @@ def match_balls(balls_a, balls_b, tolerance):
             used_b.add(j)
     return [balls_a[i] for i in range(len(balls_a)) if i not in used_a]
 
-
 def same_reading(balls_a, balls_b):
-    """
-    True if two readings show the same balls in the same places (within AGREE_TOLERANCE radii).
-    """
+    """ True if two readings show the same balls in the same places (within AGREE_TOLERANCE radii). """
     if count_colours(balls_a) != count_colours(balls_b):
         return False
     tolerance = config.AGREE_TOLERANCE * config.BALL_RADIUS_ON_MAP
     return len(match_balls(balls_a, balls_b, tolerance)) == 0
 
-
-# ---------------------------------------------------------------------------
-# Events between two committed states
-# ---------------------------------------------------------------------------
-
-def nearest_pocket(map_x, map_y):
-    """
-    Name of the pocket closest to a map position.
-    """
-    width, height = config.MAP_WIDTH, config.MAP_HEIGHT
-    pockets = {'top-left': (0, 0), 'top-middle': (width / 2, 0), 'top-right': (width, 0),
-               'bottom-left': (0, height), 'bottom-middle': (width / 2, height), 'bottom-right': (width, height)}
-    return min(pockets, key=lambda name: np.hypot(map_x - pockets[name][0], map_y - pockets[name][1]))
-
-
+# TO DO: pocket name comes from the ball's position BEFORE the shot, so it's often wrong.
+#   Take the pocket from the tracker's coast() event instead; use this only to confirm which balls are gone.
 def events_between(balls_before, balls_after):
     """
     What happened between two committed states, as a list of strings.
@@ -205,16 +101,12 @@ def events_between(balls_before, balls_after):
     """
     events = []
     for ball in match_balls(balls_before, balls_after, 10 * config.MAP_WIDTH):
-        events.append('%s ball potted (last seen near the %s pocket)' % (ball['colour'], nearest_pocket(ball['map_x'], ball['map_y'])))
+        events.append('%s ball potted (last seen near the %s pocket)' % (ball['colour'], closest_pocket([(ball['map_x'], ball['map_y'])])[0]))
     for ball in match_balls(balls_after, balls_before, 10 * config.MAP_WIDTH):
         events.append('%s ball appeared at map (%.0f, %.0f)' % (ball['colour'], ball['map_x'], ball['map_y']))
     return events
 
-
-# ---------------------------------------------------------------------------
-# Pictures
-# ---------------------------------------------------------------------------
-
+# DISPLAY AND VIDEO OUTPUT
 def draw_status(image, lines):
     """
     Writes the status lines along the top of an image.
@@ -239,14 +131,8 @@ def side_by_side(overlay, balls):
     picture[top:top + table_map.shape[0], overlay.shape[1] + 15:] = table_map
     return picture
 
-
 def counts_text(counts):
     return 'cue %d  black %d  red %d  yellow %d' % (counts['cue'], counts['black'], counts['red'], counts['yellow'])
-
-
-# ---------------------------------------------------------------------------
-# Main loop
-# ---------------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(description='Board states and events of a pool game from a fixed camera.')
@@ -254,7 +140,6 @@ def main():
     parser.add_argument('--click', nargs=2, type=int, metavar=('X', 'Y'), help='a pixel on bare cloth in the first frame')
     parser.add_argument('--start', type=int, default=0, help='first frame to process')
     parser.add_argument('--end', type=int, default=None, help='last frame to process')
-    parser.add_argument('--output', default=None, help='output video path (default results/<name>_tracked.mp4)')
     parser.add_argument('--no-video', action='store_true', help='do not write the output video')
     parser.add_argument('--show', action='store_true', help='live preview (press q to stop)')
     arguments = parser.parse_args()
@@ -276,7 +161,7 @@ def main():
 
     os.makedirs('results', exist_ok=True)
     name = os.path.splitext(os.path.basename(arguments.video))[0]
-    output_path = arguments.output or os.path.join('results', name + '_tracked.mp4')
+    output_path = os.path.join('results', name + '_tracked.mp4')
     writer = None
 
     # What the loop remember from one frame to the next
@@ -327,8 +212,6 @@ def main():
         # and something has changed since the last committed state
         if not readable:
             previous_reading = None
-            # window_committed = False
-            # frames_since_reading = config.READ_EVERY
         elif frame_index % config.READ_EVERY == 0 and not view_is_blocked(frame, reference):
             reading = read_board(frame, reference, click_x, click_y)
             trusted = previous_reading is not None and same_reading(previous_reading, reading)

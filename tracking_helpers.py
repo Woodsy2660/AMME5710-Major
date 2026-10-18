@@ -1,25 +1,11 @@
 
 import cv2
-
-import config
 import numpy as np
-import config, ball_colour, ball_detection, table_mask, table_corners, top_down, draw
-# Tracking numbers (move to config.py once they are tuned). Distances are map px unless stated.
-WINDOW_BASE_RADII = 3.0     # search window half-size for a found ball, in ball radii
-WINDOW_SPEED_FACTOR = 1.5   # extra half-size per map px the ball is expected to move this frame
-WINDOW_MAX_RADII = 15.0     # the window doubles every frame a ball is unseen, up to this size
-VELOCITY_BLEND = 0.6        # weight of a new velocity measurement (the rest is the old velocity)
-MAX_COAST_FRAMES = 8        # a moving ball unseen for more frames than this is dropped
-DROP_MIN_SPEED = 20.0       # map px/s; slower than this counts as still, and is never dropped
-POCKET_ZONE_RADII = 3.0     # dropped within this many radii of a pocket centre = potted there
-MAP_BORDER = 36             # must match the border in draw.draw_map
-NO_MATCH = 1e6              # cost for a pairing outside a ball's window
+import config, ball_colour, ball_detection, table_mask, top_down
+from config import WINDOW_BASE_RADII, WINDOW_SPEED_FACTOR, WINDOW_MAX_RADII
 
 FAMILY = {'cue': ball_colour.WHITE, 'black': ball_colour.DARK,
           'red': ball_colour.RED, 'yellow': ball_colour.YELLOW}
-POCKETS = {'top-left': (0, 0), 'top-middle': (config.MAP_WIDTH / 2, 0), 'top-right': (config.MAP_WIDTH, 0),
-           'bottom-left': (0, config.MAP_HEIGHT), 'bottom-middle': (config.MAP_WIDTH / 2, config.MAP_HEIGHT),
-           'bottom-right': (config.MAP_WIDTH, config.MAP_HEIGHT)}
 
 
 def window_half_size(track, frame_dt):

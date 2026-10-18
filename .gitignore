@@ -7,3 +7,5 @@ results/
 # Python cache
 __pycache__/
 *.pyc
+*.[mM][oO][vV]
+*.[mM][pP]4
