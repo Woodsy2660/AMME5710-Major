@@ -14,7 +14,7 @@ turn over.
 import ball_tracking
 from ball_tracking import initialise_tracking, track_frame, first_contact
 import config
-import run_video
+import board_reading
 import table_mask
 from shot_detection import shrink_to_gray, moving_pixels, update_detector, view_is_blocked
 
@@ -28,7 +28,7 @@ def capped_counts(balls):
     Ball counts per colour, capped at a full rack, so a ball detected twice
     cannot make it look like an extra ball went down later.
     """
-    counts = run_video.count_colours(balls)
+    counts = board_reading.count_colours(balls)
     counts['red'] = min(counts['red'], config.BALLS_PER_COLOUR)
     counts['yellow'] = min(counts['yellow'], config.BALLS_PER_COLOUR)
     counts['black'] = min(counts['black'], 1)
@@ -56,7 +56,7 @@ def shot_result(balls_before, balls_after):
     # Only name as many balls of each colour as were counted as potted.
     names_left = {'red': potted['red'], 'yellow': potted['yellow'],
                   'black': int(potted['black']), 'cue': int(potted['cue'])}
-    gone = run_video.match_balls(balls_before, balls_after, 10 * config.MAP_WIDTH)
+    gone = board_reading.match_balls(balls_before, balls_after, 10 * config.MAP_WIDTH)
     pockets = []
     for ball in gone:
         if names_left[ball['colour']] == 0:
@@ -87,7 +87,7 @@ class BoardWatcher:
     def calibrate(self, frame, click=None):
         """Find the table (again). Keeps the game's last board state."""
         self.click_x, self.click_y = table_mask.find_cloth_center(frame)
-        self.reference = run_video.make_reference(frame, self.click_x, self.click_y)
+        self.reference = board_reading.make_reference(frame, self.click_x, self.click_y)
         self.detector = {'state': 'SETTLED', 'still_count': 0, 'blocked': False, 'readable': False}
         self.previous_gray = None
         self.previous_reading = None
@@ -156,8 +156,8 @@ class BoardWatcher:
                 if self.detector['blocked']:
                     self.previous_reading = None
                 else:
-                    reading = run_video.read_board(frame, self.reference, self.click_x, self.click_y)
-                    if self.previous_reading is not None and run_video.same_reading(self.previous_reading, reading):
+                    reading = board_reading.read_board(frame, self.reference, self.click_x, self.click_y)
+                    if self.previous_reading is not None and board_reading.same_reading(self.previous_reading, reading):
                         self.window_committed = True
                         result = self.commit(reading)
                         self.pot_events = []
@@ -199,7 +199,7 @@ class BoardWatcher:
         # only a shot if the balls ended up somewhere else.
         # Limitation: a complete miss of the cue ball also leaves every ball in place;
         # the swap-turn key in the GUI covers that.
-        if run_video.same_reading(before, balls):
+        if board_reading.same_reading(before, balls):
             return None
 
         potted, note = shot_result(before, balls)
