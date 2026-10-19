@@ -37,6 +37,7 @@ import config
 import draw
 from board_watcher import BoardWatcher
 from game_state import GameState
+from ball_tracking import initialise_tracking, track_frame, closest_pocket
 
 # Window layout, in pixels
 VIEW_HEIGHT = 720

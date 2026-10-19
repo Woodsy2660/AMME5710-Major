@@ -11,9 +11,13 @@ table and stepped back, or leaned in to aim) are not shots, so they do not hand 
 turn over.
 """
 
+import ball_tracking
+from ball_tracking import initialise_tracking, track_frame, first_contact
 import config
 import run_video
 import table_mask
+from shot_detection import shrink_to_gray, moving_pixels, update_detector, view_is_blocked
+
 
 POCKET_SHORT_NAMES = {'top-left': 'TL', 'top-middle': 'TM', 'top-right': 'TR',
                       'bottom-left': 'BL', 'bottom-middle': 'BM', 'bottom-right': 'BR'}
@@ -58,14 +62,14 @@ def shot_result(balls_before, balls_after):
         if names_left[ball['colour']] == 0:
             continue
         names_left[ball['colour']] = names_left[ball['colour']] - 1
-        pocket = run_video.nearest_pocket(ball['map_x'], ball['map_y'])
+        pocket = ball_tracking.closest_pocket([(ball['map_x'], ball['map_y'])])[0]
         pockets.append(f"{ball['colour']} {POCKET_SHORT_NAMES[pocket]}")
     return potted, ', '.join(pockets)
 
 
 class BoardWatcher:
 
-    def __init__(self, first_frame=None, click=None):
+    def __init__(self, first_frame=None, click=None, fps = 30.0):
         """
         The table is found from the first frame (camera on a tripod, table clear).
         first_frame can be left out to test commit() on its own.
@@ -75,6 +79,10 @@ class BoardWatcher:
         self.status = 'settling'
         if first_frame is not None:
             self.calibrate(first_frame, click)
+        self.fps = fps
+        self.frame_index = 0
+        self.tracks = None
+        self.pot_events = []      # (colour, pocket) pairs seen by the tracker since the last kept state
 
     def calibrate(self, frame, click=None):
         """Find the table (again). Keeps the game's last board state."""
@@ -86,23 +94,54 @@ class BoardWatcher:
         self.frames_since_reading = config.READ_EVERY
         self.window_committed = False
         self.status = 'settling'
+        self.tracks = None
 
-    def read(self, frame):
-        """The ball list for one frame."""
-        return run_video.read_board(frame, self.reference, self.click_x, self.click_y)
+    # def read(self, frame):
+    #     """The ball list for one frame."""
+    #     return run_video.read_board(frame, self.reference, self.click_x, self.click_y)
 
     def update(self, frame):
         """
         Call once per video frame. Follows run_video.main(), steps 1-4.
         Output: None, or a dict {'potted', 'note'} when a shot has just finished.
         """
-        gray = run_video.shrink_to_gray(frame)
-        moving = run_video.moving_pixels(gray, self.previous_gray, self.reference)
-        self.previous_gray = gray
-        readable = run_video.update_detector(self.detector, moving, False, self.reference)
 
-        if self.detector['state'] == 'SHOT':
-            self.shot_since_commit = True
+        t = self.frame_index / self.fps # TO DO dont hardcode fps = 30
+        self.frame_index = self.frame_index + 1
+        # Count the moving pixels on a small grayscale version of the frame, to detect a shot.
+        gray = shrink_to_gray(frame)
+        moving = moving_pixels(gray, self.previous_gray, self.reference)
+        self.previous_gray = gray
+
+        # Update the shot detectors state machine
+        was_shot = self.detector['state'] == 'SHOT'
+        readable = update_detector(self.detector, moving, False, self.reference)
+        is_shot = self.detector['state'] == 'SHOT'
+        
+        
+       
+        # Tracking balls during a shot
+        if is_shot:
+            self.shot_since_commit = True #remember if pixel movement if due to an actual shot or other occlusion eg arm
+
+            # shot has just started - give every ball from the last committed state a track
+            if not was_shot and self.committed_balls is not None:
+                self.tracks = initialise_tracking(self.committed_balls, t)
+
+            if self.tracks is not None:
+                # follow every ball frame by frame
+                _, events = track_frame(self.tracks, frame, t, 1.0/self.fps, self.reference)
+                for event in events:
+                    #TO DO coast() reports e.g. 'red3 potted in the top-left pocket'.
+                    # Only the colour and pocket are kept: which red it was does not matter
+                    # for scoring. 'lost' events (dropped away from a pocket) are ignored;
+                    # the board counts in commit() decide what really went down.
+                    if ' potted in the ' in event:
+                        ball_id, pocket = event[:-len(' pocket')].split(' potted in the ')
+                        self.pot_events.append((self.tracks[ball_id]['colour'], pocket))
+
+        elif was_shot:
+            self.tracks = None # stop tracking
 
         result = None
         if not readable:
@@ -113,16 +152,18 @@ class BoardWatcher:
             self.frames_since_reading = self.frames_since_reading + 1
             if self.frames_since_reading >= config.READ_EVERY:
                 self.frames_since_reading = 0
-                self.detector['blocked'] = run_video.view_is_blocked(frame, self.reference)
+                self.detector['blocked'] = view_is_blocked(frame, self.reference)
                 if self.detector['blocked']:
                     self.previous_reading = None
                 else:
-                    reading = self.read(frame)
+                    reading = run_video.read_board(frame, self.reference, self.click_x, self.click_y)
                     if self.previous_reading is not None and run_video.same_reading(self.previous_reading, reading):
                         self.window_committed = True
                         result = self.commit(reading)
+                        self.pot_events = []
                     self.previous_reading = reading
 
+        # TO DO - why are these displayed? is this helpful?
         if self.detector['state'] == 'SHOT':
             self.status = 'SHOT'
         elif self.detector['blocked']:
