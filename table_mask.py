@@ -21,8 +21,36 @@ def cloth_colour_at(image_bgr, click_x, click_y):
     patch = patch.reshape(-1, 3).astype(float)
     return (float(np.median(patch[:, 0])), float(np.median(patch[:, 1])), float(np.median(patch[:, 2])))
 
+def find_cloth_center(image_bgr):
+    """
+    Automatically finds a point on the cloth by looking for the dominant blue/green region.
+    Returns (click_x, click_y) for a point likely to be on the table cloth.
+    """
+    height, width = image_bgr.shape[:2]
 
+    # Convert to HSV and look for typical cloth colors (blue/green hues)
+    image_hsv = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)
 
+    # Pool table cloths are typically blue or green with high saturation
+    hue = image_hsv[:, :, 0]
+    saturation = image_hsv[:, :, 1]
+
+    # Mask for blue-green hues (roughly 80-130 in OpenCV's 0-180 scale) with good saturation
+    cloth_like = ((hue > 80) & (hue < 130) & (saturation > 50)).astype(np.uint8) * 255
+
+    # Find the largest region
+    contours, _ = cv2.findContours(cloth_like, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    if contours:
+        largest = max(contours, key=cv2.contourArea)
+        M = cv2.moments(largest)
+        if M['m00'] > 0:
+            cx = int(M['m10'] / M['m00'])
+            cy = int(M['m01'] / M['m00'])
+            return cx, cy
+
+    # Fallback to image center
+    return width // 2, height // 2
 
 def find_cloth_mask(image_bgr, click_x, click_y, cloth_colour=None):
     """

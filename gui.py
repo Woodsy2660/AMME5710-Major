@@ -2,10 +2,13 @@
 Step 8: the game window. Live view, top-down map, scoreboard, event log and a
 ground-truth logger for measuring scoring accuracy.
 
-- board_watcher.py turns the video into shots (using run_video.py's still / blocked /
-  two-readings-agree tests), and game_state.py applies the rules to each shot.
+- board_watcher.py turns the video into shots (using the still / blocked /
+  two-readings-agree tests in shot_detection.py and board_reading.py), and
+  game_state.py applies the rules to each shot.
+- During a shot the balls are drawn where ball_tracking.py follows them, frame by frame,
+  with a trail on the top-down map. Between shots they are drawn from the last kept board.
 - The camera must be on a tripod and the first frame must show the whole, clear table
-  (see run_video.py). Press k to find the table again if the camera is bumped.
+  (see board_reading.py). Press k to find the table again if the camera is bumped.
 - Whose go it is comes from the rules, not the camera, so u (undo) and s (swap turn)
   are there to correct the game when a shot is missed or invented.
 
@@ -14,8 +17,8 @@ Usage
     python gui.py --camera 1               another webcam
     python gui.py --video game.mp4         a recorded game
     python gui.py --photos "Table images"  step through still photos (space = next)
-    python gui.py --players Ben Natalie    player names
     python gui.py --video game.mp4 --speed 2   play a recording at twice real time
+    python gui.py --video game.mp4 --start 120 --end 200   only part of a recording (seconds)
     python gui.py --video clip.mov --mid-game --record demo.mp4 --headless
                                            clip from part-way through a game, saved as a video
 
@@ -36,11 +39,12 @@ import time
 import cv2
 import numpy as np
 
+import board_reading
 import config
 import draw
-import run_video
 from board_watcher import BoardWatcher
 from game_state import GameState
+from ball_tracking import initialise_tracking, track_frame, closest_pocket
 
 # Window layout, in pixels
 VIEW_HEIGHT = 720
@@ -56,7 +60,7 @@ BLUE = (220, 150, 60)
 RED = (60, 60, 230)
 YELLOW = (0, 200, 255)
 GROUP_COLOURS = {'red': RED, 'yellow': YELLOW, None: FADED}
-STATUS_COLOURS = {'SHOT': BLUE, 'view blocked': RED, 'settled': GREEN, 'reading': YELLOW, 'settling': FADED}
+STATUS_COLOURS = {'SHOT': BLUE, 'view blocked': RED, 'camera moved': RED, 'player over table': RED, 'settled': GREEN, 'reading': YELLOW, 'settling': FADED}
 
 
 class GroundTruthLog:
@@ -163,9 +167,10 @@ def draw_panel(height, map_image, game, status, truth_log, message):
     if game.winner is not None:
         put_text(panel, f"{game.players[game.winner]} WINS", MARGIN, y + 8, 0.9, GREEN, bold=True)
     else:
-        put_text(panel, status.upper(), MARGIN, y, 0.55, STATUS_COLOURS.get(status, TEXT), bold=True)
+        colour = BLUE if status.startswith('SHOT') else STATUS_COLOURS.get(status, TEXT)
+        put_text(panel, status.upper(), MARGIN, y, 0.55, colour, bold=True)
     if message:
-        put_text(panel, message, MARGIN + 180, y, 0.5, FADED)
+        put_text(panel, message, MARGIN + 300, y, 0.5, FADED)
     y = y + 30
 
     # Event log: newest last
@@ -185,15 +190,44 @@ def draw_panel(height, map_image, game, status, truth_log, message):
     return panel
 
 
+TRAIL_POINTS = 90                  # how much of each ball's path to draw (frames)
+
+
+def draw_live_map(balls):
+    """
+    The top-down map with each ball's path this shot drawn as a fading trail behind it.
+    Balls the tracker is only predicting (not found this frame) are drawn hollow.
+    """
+    picture = draw.draw_map([ball for ball in balls if ball['seen']])
+    border = config.MAP_BORDER
+    for ball in balls:
+        colour = draw.DRAW_COLOURS[ball['colour']]
+        # Only join up places where the ball was actually found. Predicted positions
+        # (the tracker coasting while a ball is hidden) can overshoot and draw false paths.
+        path = ball['path'][-TRAIL_POINTS:]
+        seen = [(int(border + x), int(border + y)) for x, y, found in path if found]
+        for i in range(1, len(seen)):
+            # Older parts of the trail are thinner, so the direction of travel reads at a glance.
+            thickness = 1 + (3 * i) // len(seen)
+            cv2.line(picture, seen[i - 1], seen[i], colour, thickness, cv2.LINE_AA)
+        if not ball['seen']:
+            centre = (int(border + ball['map_x']), int(border + ball['map_y']))
+            cv2.circle(picture, centre, int(round(config.BALL_RADIUS_ON_MAP)) + 1, colour, 2, cv2.LINE_AA)
+    return picture
+
+
 def render(frame, watcher, game, truth_log, message=''):
     """
-    Builds the whole window image: the frame with the last kept board state drawn on it
-    (left) and the panel (right).
+    Builds the whole window image: the camera frame with the balls drawn where they are
+    now (left) and the panel (right).
     """
-    balls = watcher.committed_balls or []
+    balls = watcher.live_balls()
     view = draw.draw_overlay(frame, watcher.reference['table_hull'], watcher.reference['corners'], balls)
     view = resize_to_height(view, VIEW_HEIGHT)
-    panel = draw_panel(VIEW_HEIGHT, draw.draw_map(balls), game, watcher.status, truth_log, message)
+    status = watcher.status
+    if watcher.tracks is not None and status == 'SHOT':
+        status = f"SHOT - tracking {len(balls)} balls"
+    panel = draw_panel(VIEW_HEIGHT, draw_live_map(balls), game, status, truth_log, message)
     return np.hstack([view, panel])
 
 
@@ -201,8 +235,9 @@ def render(frame, watcher, game, truth_log, message=''):
 
 def open_source(args):
     """
-    Returns a function that gives the next frame (or None when finished), and the
-    frame rate to play at (None = as fast as possible: photos and live cameras).
+    Returns a function that gives the next frame (or None when finished), the video's
+    frame rate, the rate to play at (None = as fast as possible), and the frame to find
+    the table from (None = the first frame played).
     """
     if args.photos:
         names = sorted(n for n in os.listdir(args.photos)
@@ -213,22 +248,33 @@ def open_source(args):
             if not paths:
                 return None
             return cv2.imread(paths.pop(0))
-        return next_photo, None
+        return next_photo, 30.0, None, None
 
     capture = cv2.VideoCapture(args.video if args.video else args.camera)
     if not capture.isOpened():
         raise SystemExit('Could not open the camera or video')
+    fps = capture.get(cv2.CAP_PROP_FPS) or 30.0
+
+    last_frame = None
+    calibration_frame = None
+    if args.video:
+        # The camera is on a tripod, so the table is found from the very first frame of the
+        # recording (which must show the clear table), even when playing from later on.
+        ok, calibration_frame = capture.read()
+        capture.set(cv2.CAP_PROP_POS_FRAMES, int(args.start * fps))
+        if args.end is not None:
+            last_frame = int(args.end * fps)
 
     def next_frame():
+        if last_frame is not None and capture.get(cv2.CAP_PROP_POS_FRAMES) > last_frame:
+            return None
         ok, frame = capture.read()
         return frame if ok else None
 
     # A recorded video is played at its real speed (times --speed), so ground truth can
-    # be typed in while watching. Processing runs faster than real time, so it keeps up.
-    play_fps = None
-    if args.video:
-        play_fps = (capture.get(cv2.CAP_PROP_FPS) or 30.0) * args.speed
-    return next_frame, play_fps
+    # be typed in while watching. A live camera already arrives at real speed.
+    play_fps = fps * args.speed if args.video else None
+    return next_frame, fps, play_fps, calibration_frame
 
 
 def open_recording(path, picture, fps):
@@ -252,31 +298,33 @@ def main():
     parser.add_argument('--camera', type=int, default=0)
     parser.add_argument('--video')
     parser.add_argument('--photos')
-    parser.add_argument('--players', nargs=2, default=['Player 1', 'Player 2'])
-    parser.add_argument('--speed', type=float, default=1.0,
-                        help='video playback speed, e.g. 2 = twice real time')
     parser.add_argument('--click', nargs=2, type=int, metavar=('X', 'Y'),
                         help='a pixel on bare cloth in the first frame')
+    parser.add_argument('--start', type=float, default=0.0, help='video: start this many seconds in')
+    parser.add_argument('--end', type=float, default=None, help='video: stop at this many seconds')
+    parser.add_argument('--speed', type=float, default=1.0,
+                        help='video playback speed, e.g. 2 = twice real time')
     parser.add_argument('--mid-game', action='store_true',
                         help='the video starts part-way through a game: take the ball counts from the first board')
     parser.add_argument('--first-player-colour', choices=['red', 'yellow'],
                         help='with --mid-game: the colour the first named player is on')
     parser.add_argument('--moving-camera', action='store_true',
-                        help='handheld camera: find the table again at every board reading')
+                        help='the camera may be moved or bumped: find the table again before each board reading')
     parser.add_argument('--record', metavar='PATH', help='also save the window as a video (.mp4)')
     parser.add_argument('--headless', action='store_true',
                         help='no window (use with --record): process the whole video and stop')
     args = parser.parse_args()
 
-    next_frame, play_fps = open_source(args)
+    next_frame, fps, play_fps, calibration_frame = open_source(args)
     photo_mode = args.photos is not None
 
     frame = next_frame()
     if frame is None:
         raise SystemExit('No frames to read')
-    watcher = BoardWatcher(frame, args.click, args.moving_camera)
+    watcher = BoardWatcher(calibration_frame if calibration_frame is not None else frame, args.click, fps,
+                           args.moving_camera)
 
-    game = GameState(args.players)
+    game = GameState()
     truth_log = GroundTruthLog()
     history = []                       # copies of the game before each shot, for undo
     message = ''
@@ -285,6 +333,7 @@ def main():
     next_show_time = time.time()
     joined_mid_game = False
     writer = None
+    frames_played = 0
 
     if not args.headless:
         cv2.namedWindow('Pool', cv2.WINDOW_NORMAL)
@@ -296,9 +345,9 @@ def main():
                 if new_frame is None:
                     message = 'end of input'
                     paused = True
-                    new_frame = frame
                 else:
                     frame = new_frame
+                    frames_played = frames_played + 1
             first = False
 
             if message != 'end of input':
@@ -307,7 +356,9 @@ def main():
                         # Photos have no motion to measure and may each be from a different
                         # angle: find the table every time and treat each photo as one shot.
                         watcher.calibrate(frame)
-                        result = watcher.commit(watcher.read(frame), shot_happened=True)
+                        reading = board_reading.read_board(frame, watcher.reference,
+                                                           watcher.click_x, watcher.click_y)
+                        result = watcher.commit(reading, shot_happened=True)
                         watcher.status = 'settled'
                         paused = True                 # wait for space before the next photo
                     else:
@@ -318,7 +369,7 @@ def main():
 
                 # Picking up a game in progress: the first kept board sets the ball counts.
                 if args.mid_game and not joined_mid_game and watcher.committed_balls is not None:
-                    counts = run_video.count_colours(watcher.committed_balls)
+                    counts = board_reading.count_colours(watcher.committed_balls)
                     game.start_mid_game(counts['red'], counts['yellow'], args.first_player_colour)
                     joined_mid_game = True
 
@@ -332,7 +383,7 @@ def main():
         picture = render(frame, watcher, game, truth_log, message)
         if args.record and (not paused or writer is None):
             if writer is None:
-                writer = open_recording(args.record, picture, play_fps or 30.0)
+                writer = open_recording(args.record, picture, fps)
             writer.write(picture)
         if args.headless:
             if message == 'end of input':
@@ -362,7 +413,7 @@ def main():
             game.visits_left = 1
             message = 'swapped turn'
         elif key == ord('n'):
-            game = GameState(args.players)
+            game = GameState()
             watcher.committed_balls = None
             watcher.shot_since_commit = False
             history = []
@@ -381,6 +432,7 @@ def main():
         elif key in (13, 10):
             truth_log.save_pending()
             message = 'truth saved'
+
 
     if writer is not None:
         writer.release()

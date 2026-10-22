@@ -8,5 +8,9 @@ results/
 __pycache__/
 *.pyc
 
+*.[mM][oO][vV]
+*.[mM][pP]4
+
 # Game logs from gui.py
 logs/
+
