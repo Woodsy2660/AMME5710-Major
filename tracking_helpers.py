@@ -70,6 +70,14 @@ def find_candidates(frame_bgr, window, colour, reference):
         map_x, map_y = top_down.move_point(reference['to_map'], x, y)
         if colour == 'black' and ball_detection.is_at_pocket_mouth(map_x, map_y):
             continue                                  # a dark pocket opening, not the black ball
+        # Verify dark/white candidates through colour_at to reject shadows
+        if colour in ('cue', 'black'):
+            expected_radius = top_down.ball_radius_in_photo(reference['to_map'], reference['to_photo'], x, y)
+            # x, y are in full-frame coords; need crop-relative coords for crop_hsv
+            crop_x, crop_y = x - x0, y - y0
+            detected = ball_detection.colour_at(crop_hsv, crop_x, crop_y, 0.55 * expected_radius, 'darkwhite')
+            if detected is None or detected != colour:
+                continue
         found.append((map_x, map_y))
     return found
 

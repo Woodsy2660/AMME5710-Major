@@ -52,13 +52,17 @@ def make_ball(colour, photo_x, photo_y, radius, to_map, visible):
 
 def colour_at(image_hsv, centre_x, centre_y, radius, family):
     """
-    Checks the colour in a disc round a candidate centre. 
-    inputs: 
+    Checks the colour in a disc round a candidate centre.
+    inputs:
     - image_hsv: the frame in HSV
     - centre_x, centre_y, radius: the disc (about half the ball radius)
-    - family: the mask the centre came from ('red', 'yellow' ...)
+    - family: the mask the centre came from ('red', 'yellow', 'darkwhite')
     Output:
-    - 'red', 'yellow', 'cue', 'black', or None if the disc does not hold enough colour 
+    - 'red', 'yellow', 'cue', 'black', or None if the disc does not hold enough colour
+
+    For darkwhite: a shadow on the cloth is dark but keeps the cloth's saturation (~190);
+    the black ball has a grey core (S < 60). Measured colourless share of dark pixels:
+    0.28-0.76 on the black ball, 0.00 on every shadow.
     """
     image_height, image_width = image_hsv.shape[:2]
     y0 = max(0, int(centre_y - radius))
@@ -68,7 +72,8 @@ def colour_at(image_hsv, centre_x, centre_y, radius, family):
     ys, xs = np.mgrid[y0:y1, x0:x1]
     inside = (xs - centre_x) ** 2 + (ys - centre_y) ** 2 <= radius * radius
 
-    labels = ball_colour.label_pixels(image_hsv[ys[inside], xs[inside]])
+    pixels = image_hsv[ys[inside], xs[inside]]
+    labels = ball_colour.label_pixels(pixels)
     white_fraction = np.mean(labels == ball_colour.WHITE)
     dark_fraction = np.mean(labels == ball_colour.DARK)
     red_fraction = np.mean(labels == ball_colour.RED)
@@ -78,10 +83,17 @@ def colour_at(image_hsv, centre_x, centre_y, radius, family):
         return 'red' if red_fraction > config.MIN_COLOUR_FRACTION else None
     if family == 'yellow':
         return 'yellow' if yellow_fraction > config.MIN_COLOUR_FRACTION else None
+
+    # darkwhite branch: distinguish cue ball, black ball, and shadows
     if white_fraction + dark_fraction < config.MIN_COLOUR_FRACTION:
         return None
-    if white_fraction > dark_fraction:
-        return 'cue'
+    if dark_fraction < config.BLACK_MIN_DARK_FRACTION:
+        return 'cue'                                      # bright, no dark pixels
+    dark = labels == ball_colour.DARK
+    colourless = dark & (pixels[:, 1] < config.BLACK_MAX_SATURATION)
+    colourless_share = np.sum(colourless) / max(1, np.sum(dark))
+    if colourless_share < config.BLACK_MIN_COLOURLESS_SHARE:
+        return None                                       # dark but still cloth-coloured: a shadow
     return 'black'
 
 def find_centres(colour_mask, radius, to_map, offset_x, offset_y):
@@ -205,8 +217,10 @@ def find_balls(image_hsv, cloth_mask, table_contour, table_hull, to_map, to_phot
             expected_area = np.pi * expected_radius * expected_radius
             if area < config.MIN_AREA_RATIO * expected_area:
                 continue                                  # too small
-            if at_edge and area > config.MAX_EDGE_BLOB_AREA_RATIO * expected_area:
-                continue                                  # a pocket or a length of rail
+            # A big bite out of the outline can be a pocket or a length of rail, but it can also be
+            # a row of balls along a cushion in shadow (the cloth outline stops short of a shaded
+            # cushion, so every ball against it joins one long strip). It is still searched: at
+            # the edge only red and yellow are looked for (below), and pockets and rails are neither.
 
             blob_mask = (blob_image == blob).astype(np.uint8)
             # thickness = cv2.distanceTransform(blob_mask, cv2.DIST_L2, 5).max()
@@ -233,7 +247,14 @@ def find_balls(image_hsv, cloth_mask, table_contour, table_hull, to_map, to_phot
                         ('yellow', labels == ball_colour.YELLOW),
                         ('darkwhite', (labels == ball_colour.DARK) | (labels == ball_colour.WHITE))]
             if at_edge:
-                families = families[:2]                   # pockets and rails are dark too
+                # Against a cushion only the black is looked for besides red and yellow (a shaded
+                # cushion would otherwise hide it; pocket openings are filtered out below). White
+                # is not: the silver corner plates and shiny rails read as white. Yellow must be
+                # strongly coloured: a hand or arm resting on the rail is a weaker yellow.
+                saturation = crop_pixels[:, 1].reshape(blob_crop.shape)
+                families = [('red', labels == ball_colour.RED),
+                            ('yellow', (labels == ball_colour.YELLOW) & (saturation > config.EDGE_YELLOW_MIN_SATURATION)),
+                            ('darkwhite', labels == ball_colour.DARK)]
 
             for family, family_pixels in families:
                 colour_mask = (family_pixels & (blob_crop > 0)).astype(np.uint8)
@@ -243,7 +264,7 @@ def find_balls(image_hsv, cloth_mask, table_contour, table_hull, to_map, to_phot
                     # The colour is checked at the peak, before any shift, so a hidden ball is
                     # not judged on the pixels of the ball in front of it.
                     colour = colour_at(image_hsv, x, y, 0.55 * expected_radius, family)
-                    if colour is None:
+                    if colour is None or (at_edge and colour == 'cue'):
                         continue
                     x, y = shift_sliver_inward(x, y, peak_height, expected_radius, cloth_mask)
                     map_x, map_y = move_point(to_map, x, y)
@@ -270,4 +291,14 @@ def find_balls(image_hsv, cloth_mask, table_contour, table_hull, to_map, to_phot
                 break
         if not duplicate:
             tidy.append(ball)
-    return tidy
+
+    # The shaded underside of a red or yellow ball can read as dark and be found as a 'black'
+    # sitting on top of it. A real black touching another ball is two radii from its centre,
+    # so a black closer than SHADOW_BLACK_RADII to a red or yellow is that ball's shadow.
+    def is_shadow(ball):
+        if ball['colour'] != 'black':
+            return False
+        return any(other['colour'] in ('red', 'yellow') and
+                   np.hypot(ball['map_x'] - other['map_x'], ball['map_y'] - other['map_y'])
+                   < config.SHADOW_BLACK_RADII * config.BALL_RADIUS_ON_MAP for other in tidy)
+    return [ball for ball in tidy if not is_shadow(ball)]

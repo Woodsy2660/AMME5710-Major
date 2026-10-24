@@ -1,3 +1,4 @@
+import cv2
 import numpy as np
 import config
 from config import VELOCITY_BLEND, MAX_COAST_FRAMES, DROP_MIN_SPEED, POCKET_ZONE_RADII, NO_MATCH, POCKETS
@@ -20,6 +21,7 @@ def initialise_tracking(frame, t):
                            'seen_x': ball['map_x'], 'seen_y': ball['map_y'], 'seen_t': t,
                            'missed': 0, 'vanish': None, 'lost': False,
                            'free': False,   # may move away from where it is (see free_hit_balls)
+                           'hidden': False, # ball is under an obstruction (arm, cue, body)
                            'path': [(ball['map_x'], ball['map_y'], True)]}
     return tracked_balls
 
@@ -173,7 +175,57 @@ def track_frame(tracks, frame_bgr, t, frame_dt, reference):
 
         for ball_id in ids:
             if ball_id not in matched:
-                event = coast(ball_id, tracks[ball_id], windows[ball_id][:2])
+                track = tracks[ball_id]
+                # A hidden ball coasts without being dropped - obstruction is temporary.
+                # A moving (free) ball still counts as missed, so its search window keeps growing
+                # (window_half_size). A still ball does not: it is just under a hand or the cue, and
+                # counting it as missed would release the cue ball as if it had been struck.
+                if track.get('hidden', False):
+                    predicted = windows[ball_id][:2]
+                    if track['free']:
+                        track['missed'] += 1
+                    if track['vanish'] is None:
+                        track['vanish'] = predicted   # where it was when it went out of sight (used by coast)
+                    track['x'], track['y'] = predicted
+                    track['path'].append((predicted[0], predicted[1], False))
+                    track['vx'] *= 0.95  # Velocity decays while hidden
+                    track['vy'] *= 0.95
+                    continue
+                event = coast(ball_id, track, windows[ball_id][:2])
                 if event:
                     events.append(event)
+    find_cue_anywhere(tracks, frame_bgr, t, reference)
     return windows, events
+
+
+def find_cue_anywhere(tracks, frame_bgr, t, reference):
+    """
+    There is only one cue ball, so when it has been missing for CUE_RELEASE_FRAMES frames it
+    is searched for over the whole table, not just round where it was last seen. This finds it
+    again after it was moved by hand since the last board reading (placed for the break, or after
+    a scratch), and after a fast shot that left its window. A cue ball that is already rolling
+    must still be within reach of where it was seen (TRACK_MAX_SPEED).
+    """
+    cue = tracks.get('cue')
+    if cue is None or cue['lost'] or cue['missed'] < config.CUE_RELEASE_FRAMES:
+        return
+    x, y, width, height = cv2.boundingRect(reference['table_hull'])
+    found = find_candidates(frame_bgr, (x, y, x + width, y + height), 'cue', reference)
+    if cue['free']:
+        reach = config.TRACK_MAX_SPEED * max(t - cue['seen_t'], 1e-3) + config.BALL_RADIUS_ON_MAP
+        found = [p for p in found if np.hypot(p[0] - cue['seen_x'], p[1] - cue['seen_y']) <= reach]
+    if not found:
+        return
+    best_x, best_y = min(found, key=lambda p: np.hypot(p[0] - cue['x'], p[1] - cue['y']))
+    confirmed = any(seen for _, _, seen in cue['path'][1:])
+    if not cue['free'] and confirmed:
+        # It was seen sitting where it should be this shot, and now it is somewhere else: it has
+        # been struck. Follow it as a rolling ball from here.
+        cue['free'] = True
+    if not cue['free']:
+        # It was never where the last board reading put it (moved by hand since then):
+        # start again from here, still.
+        cue.update(x=best_x, y=best_y, seen_x=best_x, seen_y=best_y, seen_t=t, missed=0, vanish=None,
+                   vx=0.0, vy=0.0, path=[(best_x, best_y, True)])
+        return
+    see(cue, (best_x, best_y), t)

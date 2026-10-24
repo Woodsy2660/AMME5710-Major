@@ -1,38 +1,27 @@
 """
-Step 8: the game window. Live view, top-down map, scoreboard, event log and a
-ground-truth logger for measuring scoring accuracy.
+Step 8: the live tracking window. The camera on the left, a top-down table on the right,
+with every ball drawn where it is now and a fading trail behind each rolling ball.
 
-- board_watcher.py turns the video into shots (using the still / blocked /
-  two-readings-agree tests in shot_detection.py and board_reading.py), and
-  game_state.py applies the rules to each shot.
-- During a shot the balls are drawn where ball_tracking.py follows them, frame by frame,
-  with a trail on the top-down map. Between shots they are drawn from the last kept board.
-- The camera must be on a tripod and the first frame must show the whole, clear table
-  (see board_reading.py). Press k to find the table again if the camera is bumped.
-- Whose go it is comes from the rules, not the camera, so u (undo) and s (swap turn)
-  are there to correct the game when a shot is missed or invented.
+- board_watcher.py follows the game: between shots the balls come from the last agreed board
+  reading; during a shot they come from ball_tracking.py, frame by frame.
+- The camera should be on a tripod, with the first frame showing the whole table.
+  Press k to find the table again if the camera is bumped (or use --moving-camera).
+- Scoring (game_state.py) is not shown here for now: this window is only about the tracking.
 
 Usage
     python gui.py                          webcam 0 (an iPhone via Continuity Camera)
     python gui.py --camera 1               another webcam
     python gui.py --video game.mp4         a recorded game
     python gui.py --photos "Table images"  step through still photos (space = next)
-    python gui.py --video game.mp4 --speed 2   play a recording at twice real time
+    python gui.py --video game.mp4 --speed 2               play at twice real time
     python gui.py --video game.mp4 --start 120 --end 200   only part of a recording (seconds)
-    python gui.py --video clip.mov --mid-game --record demo.mp4 --headless
-                                           clip from part-way through a game, saved as a video
+    python gui.py --video game.mp4 --record demo.mp4 --headless   save the window as a video
 
 Keys
-    q / esc   quit                         space   pause (photos: next photo)
-    u         undo last shot               s       swap turn
-    n         new game                     k       find the table again
-    r y b c   ground truth: a red / yellow / black / cue ball really went down
-    enter     ground truth: save the shot just played (with whatever was typed)
+    space   pause (photos: next photo)     k   find the table again     q / esc   quit
 """
 
 import argparse
-import copy
-import csv
 import os
 import time
 
@@ -42,196 +31,115 @@ import numpy as np
 import board_reading
 import config
 import draw
+import top_down
 from board_watcher import BoardWatcher
-from game_state import GameState
-from ball_tracking import initialise_tracking, track_frame, closest_pocket
 
-# Window layout, in pixels
-VIEW_HEIGHT = 720
-PANEL_WIDTH = 560
-MARGIN = 20
+# Layout, in pixels: video and table side by side at the same height, a status line below.
+ROW_HEIGHT = 600
+STATUS_HEIGHT = 44
+GAP = 12
 
-# Panel colours in BGR order
-BACKGROUND = (32, 26, 22)
+BACKGROUND = (28, 24, 20)            # BGR
 TEXT = (235, 235, 235)
 FADED = (150, 150, 150)
-GREEN = (90, 200, 120)
-BLUE = (220, 150, 60)
-RED = (60, 60, 230)
-YELLOW = (0, 200, 255)
-GROUP_COLOURS = {'red': RED, 'yellow': YELLOW, None: FADED}
-STATUS_COLOURS = {'SHOT': BLUE, 'view blocked': RED, 'camera moved': RED, 'player over table': RED, 'settled': GREEN, 'reading': YELLOW, 'settling': FADED}
+STATUS_COLOURS = {'SHOT': (230, 160, 70), 'settled': (110, 200, 120), 'reading': (0, 200, 255),
+                  'settling': FADED, 'view blocked': (70, 70, 230), 'camera moved': (70, 70, 230),
+                  'player over table': (70, 70, 230)}
 
-
-class GroundTruthLog:
-    """
-    Writes one CSV row per shot: what the system decided ('system' rows) and what
-    really happened ('truth' rows, typed in with r / y / b / c then enter).
-    Compare the two afterwards for the scoring-accuracy results.
-    """
-
-    FIELDS = ['time', 'source', 'shot', 'shooter', 'red', 'yellow', 'black', 'cue', 'fouls', 'pockets']
-
-    def __init__(self, folder='logs'):
-        os.makedirs(folder, exist_ok=True)
-        self.path = os.path.join(folder, time.strftime('game_%Y%m%d_%H%M%S.csv'))
-        with open(self.path, 'w', newline='') as file:
-            csv.writer(file).writerow(self.FIELDS)
-        self.pending = {'red': 0, 'yellow': 0, 'black': False, 'cue': False}
-        self.truth_shots = 0
-
-    def write(self, source, shot, shooter, potted, fouls, pockets=''):
-        row = [time.strftime('%H:%M:%S'), source, shot, shooter, potted['red'], potted['yellow'],
-               int(potted['black']), int(potted['cue']), '; '.join(fouls), pockets]
-        with open(self.path, 'a', newline='') as file:
-            csv.writer(file).writerow(row)
-
-    def save_pending(self):
-        # Shooter is left blank: by the time enter is pressed the turn may have changed.
-        self.truth_shots = self.truth_shots + 1
-        self.write('truth', self.truth_shots, '', self.pending, [])
-        self.pending = {'red': 0, 'yellow': 0, 'black': False, 'cue': False}
-
-    def describe_pending(self):
-        parts = []
-        if self.pending['red']:
-            parts.append(f"{self.pending['red']} red")
-        if self.pending['yellow']:
-            parts.append(f"{self.pending['yellow']} yellow")
-        if self.pending['black']:
-            parts.append('black')
-        if self.pending['cue']:
-            parts.append('cue')
-        return ', '.join(parts) if parts else 'nothing'
-
-
-# ---------------------------------------------------------------- drawing
-
-def put_text(image, text, x, y, scale=0.55, colour=TEXT, bold=False):
-    cv2.putText(image, text, (int(x), int(y)), cv2.FONT_HERSHEY_SIMPLEX, scale, colour,
-                2 if bold else 1, cv2.LINE_AA)
+TRAIL_POINTS = 120                   # how much of each ball's path this shot is drawn (frames)
 
 
 def resize_to_height(image, height):
-    scale = height / image.shape[0]
-    return cv2.resize(image, (int(image.shape[1] * scale), height))
+    return cv2.resize(image, (int(image.shape[1] * height / image.shape[0]), height),
+                      interpolation=cv2.INTER_AREA)
 
 
-def resize_to_width(image, width):
-    scale = width / image.shape[1]
-    return cv2.resize(image, (width, int(image.shape[0] * scale)))
+def ball_colour(ball):
+    """BGR colour for drawing a ball. The black gets a light outline elsewhere so it shows."""
+    return draw.DRAW_COLOURS[ball['colour']]
 
 
-def draw_player(panel, game, player, y):
-    """One player's row: turn marker, name, colour, and seven potted/remaining dots."""
-    is_turn = game.current == player and game.winner is None
-    group = game.groups[player]
+# ---------------------------------------------------------------- the camera view
 
-    if is_turn:
-        cv2.rectangle(panel, (MARGIN - 8, y - 22), (PANEL_WIDTH - MARGIN + 8, y + 40), (60, 50, 44), -1)
-        put_text(panel, '>', MARGIN, y, 0.7, GREEN, bold=True)
-
-    put_text(panel, game.players[player], MARGIN + 22, y, 0.7, TEXT, bold=True)
-    group_text = group if group is not None else 'open table'
-    put_text(panel, group_text, MARGIN + 170, y, 0.55, GROUP_COLOURS[group])
-    if game.fouls[player]:
-        put_text(panel, f"fouls {game.fouls[player]}", MARGIN + 300, y, 0.5, FADED)
-    if is_turn and game.visits_left > 1:
-        put_text(panel, '2 visits', PANEL_WIDTH - MARGIN - 80, y, 0.5, GREEN, bold=True)
-
-    # Filled dot = potted, hollow dot = still on the table.
-    potted = game.balls_potted(player)
-    for i in range(config.BALLS_PER_COLOUR):
-        centre = (MARGIN + 32 + i * 30, y + 22)
-        colour = GROUP_COLOURS[group]
-        if i < potted:
-            cv2.circle(panel, centre, 10, colour, -1, cv2.LINE_AA)
-        else:
-            cv2.circle(panel, centre, 10, colour, 1, cv2.LINE_AA)
-    put_text(panel, f"{potted}/{config.BALLS_PER_COLOUR}", MARGIN + 32 + 7 * 30, y + 28, 0.55, TEXT)
-
-
-def draw_panel(height, map_image, game, status, truth_log, message):
-    panel = np.full((height, PANEL_WIDTH, 3), BACKGROUND, dtype=np.uint8)
-
-    # Top-down map
-    small_map = resize_to_width(map_image, PANEL_WIDTH - 2 * MARGIN)
-    panel[MARGIN:MARGIN + small_map.shape[0], MARGIN:MARGIN + small_map.shape[1]] = small_map
-    y = MARGIN + small_map.shape[0] + 40
-
-    # Scoreboard
-    draw_player(panel, game, 0, y)
-    draw_player(panel, game, 1, y + 72)
-    y = y + 140
-
-    if game.winner is not None:
-        put_text(panel, f"{game.players[game.winner]} WINS", MARGIN, y + 8, 0.9, GREEN, bold=True)
-    else:
-        colour = BLUE if status.startswith('SHOT') else STATUS_COLOURS.get(status, TEXT)
-        put_text(panel, status.upper(), MARGIN, y, 0.55, colour, bold=True)
-    if message:
-        put_text(panel, message, MARGIN + 300, y, 0.5, FADED)
-    y = y + 30
-
-    # Event log: newest last
-    for line in game.log[-5:]:
-        colour = RED if 'FOUL' in line or 'wins' in line else TEXT
-        put_text(panel, line[:62], MARGIN, y, 0.47, colour)
-        y = y + 22
-
-    # Ground truth and key help along the bottom
-    bottom = height - MARGIN
-    put_text(panel, f"Truth for next shot: {truth_log.describe_pending()}   (saved: {truth_log.truth_shots})",
-             MARGIN, bottom - 44, 0.47, YELLOW)
-    put_text(panel, 'r y b c = really potted   enter = save   u = undo   s = swap turn',
-             MARGIN, bottom - 22, 0.45, FADED)
-    put_text(panel, 'n = new game   k = find table   space = pause   q = quit',
-             MARGIN, bottom, 0.45, FADED)
-    return panel
-
-
-TRAIL_POINTS = 90                  # how much of each ball's path to draw (frames)
-
-
-def draw_live_map(balls):
+def draw_camera(frame, balls, reference):
     """
-    The top-down map with each ball's path this shot drawn as a fading trail behind it.
-    Balls the tracker is only predicting (not found this frame) are drawn hollow.
+    The camera frame with a thin ring round each ball in its own colour, and the trail of
+    each rolling ball this shot.
     """
-    picture = draw.draw_map([ball for ball in balls if ball['seen']])
-    border = config.MAP_BORDER
+    picture = frame.copy()
+    to_photo = reference['to_photo']
+    trails = [ball for ball in balls if len(ball['path']) > 1]
+    if trails:
+        overlay = picture.copy()
+        for ball in trails:
+            colour = (235, 235, 235) if ball['colour'] == 'black' else ball_colour(ball)
+            points = [top_down.move_point(to_photo, x, y) for x, y, _ in ball['path'][-TRAIL_POINTS:]]
+            points = [(int(x), int(y)) for x, y in points]
+            for i in range(1, len(points)):
+                thickness = 1 + (5 * i) // len(points)            # thicker towards the ball
+                cv2.line(overlay, points[i - 1], points[i], colour, thickness, cv2.LINE_AA)
+        cv2.addWeighted(overlay, 0.7, picture, 0.3, 0, dst=picture)
+
     for ball in balls:
-        colour = draw.DRAW_COLOURS[ball['colour']]
-        # Only join up places where the ball was actually found. Predicted positions
-        # (the tracker coasting while a ball is hidden) can overshoot and draw false paths.
-        path = ball['path'][-TRAIL_POINTS:]
-        seen = [(int(border + x), int(border + y)) for x, y, found in path if found]
-        for i in range(1, len(seen)):
-            # Older parts of the trail are thinner, so the direction of travel reads at a glance.
-            thickness = 1 + (3 * i) // len(seen)
-            cv2.line(picture, seen[i - 1], seen[i], colour, thickness, cv2.LINE_AA)
-        if not ball['seen']:
-            centre = (int(border + ball['map_x']), int(border + ball['map_y']))
-            cv2.circle(picture, centre, int(round(config.BALL_RADIUS_ON_MAP)) + 1, colour, 2, cv2.LINE_AA)
+        colour = (235, 235, 235) if ball['colour'] == 'black' else ball_colour(ball)
+        centre = (int(ball['photo_x']), int(ball['photo_y']))
+        radius = int(ball['radius'] * 1.3) + 2
+        cv2.circle(picture, centre, radius, (0, 0, 0), 4, cv2.LINE_AA)   # dark edge so it shows on any background
+        cv2.circle(picture, centre, radius, colour, 2, cv2.LINE_AA)
     return picture
 
 
-def render(frame, watcher, game, truth_log, message=''):
+# ---------------------------------------------------------------- the top-down table
+
+def draw_table(balls):
     """
-    Builds the whole window image: the camera frame with the balls drawn where they are
-    now (left) and the panel (right).
+    The top-down table (draw.draw_map) with each rolling ball's trail this shot, turned 180
+    degrees to match the camera (as on Ben's branch).
     """
+    picture = draw.draw_map(balls)
+    border = config.MAP_BORDER
+    radius = int(round(config.BALL_RADIUS_ON_MAP)) + 1
+    for ball in balls:
+        points = [(int(border + x), int(border + y)) for x, y, _ in ball['path'][-TRAIL_POINTS:]]
+        for i in range(1, len(points)):
+            thickness = 1 + (4 * i) // len(points)                # thicker towards the ball
+            cv2.line(picture, points[i - 1], points[i], ball_colour(ball), thickness, cv2.LINE_AA)
+    # Redraw the balls on top of their trails, with an outline (white for the black ball).
+    for ball in balls:
+        centre = (int(border + ball['map_x']), int(border + ball['map_y']))
+        cv2.circle(picture, centre, radius, ball_colour(ball), -1, cv2.LINE_AA)
+        edge = (230, 230, 230) if ball['colour'] == 'black' else (0, 0, 0)
+        cv2.circle(picture, centre, radius, edge, 1, cv2.LINE_AA)
+    return cv2.flip(picture, -1)
+
+
+# ---------------------------------------------------------------- the whole window
+
+def render(frame, watcher, message=''):
     balls = watcher.live_balls()
-    view = draw.draw_overlay(frame, watcher.reference['table_hull'], watcher.reference['corners'], balls)
-    view = resize_to_height(view, VIEW_HEIGHT)
+    camera = resize_to_height(draw_camera(frame, balls, watcher.reference), ROW_HEIGHT)
+    table = resize_to_height(draw_table(balls), ROW_HEIGHT)
+
+    width = camera.shape[1] + GAP + table.shape[1]
+    picture = np.full((ROW_HEIGHT + STATUS_HEIGHT, width, 3), BACKGROUND, dtype=np.uint8)
+    picture[:ROW_HEIGHT, :camera.shape[1]] = camera
+    picture[:ROW_HEIGHT, camera.shape[1] + GAP:] = table
+
     status = watcher.status
+    colour = STATUS_COLOURS.get(status, TEXT)
     if watcher.tracks is not None and status == 'SHOT':
         status = f"SHOT - tracking {len(balls)} balls"
-    panel = draw_panel(VIEW_HEIGHT, draw_live_map(balls), game, status, truth_log, message)
-    return np.hstack([view, panel])
+    y = ROW_HEIGHT + 30
+    cv2.putText(picture, status.upper(), (16, y), cv2.FONT_HERSHEY_SIMPLEX, 0.65, colour, 2, cv2.LINE_AA)
+    if message:
+        cv2.putText(picture, message, (420, y), cv2.FONT_HERSHEY_SIMPLEX, 0.55, FADED, 1, cv2.LINE_AA)
+    keys = 'space = pause    k = find table    q = quit'
+    size = cv2.getTextSize(keys, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
+    cv2.putText(picture, keys, (width - size[0] - 16, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, FADED, 1, cv2.LINE_AA)
+    return picture
 
 
-# ---------------------------------------------------------------- main loop
+# ---------------------------------------------------------------- input and output
 
 def open_source(args):
     """
@@ -271,8 +179,7 @@ def open_source(args):
         ok, frame = capture.read()
         return frame if ok else None
 
-    # A recorded video is played at its real speed (times --speed), so ground truth can
-    # be typed in while watching. A live camera already arrives at real speed.
+    # A recorded video is played at its real speed (times --speed); a live camera already is.
     play_fps = fps * args.speed if args.video else None
     return next_frame, fps, play_fps, calibration_frame
 
@@ -293,8 +200,10 @@ def open_recording(path, picture, fps):
     raise SystemExit(f'Could not open {path} for writing')
 
 
+# ---------------------------------------------------------------- main loop
+
 def main():
-    parser = argparse.ArgumentParser(description='8-ball pool scoring window')
+    parser = argparse.ArgumentParser(description='Live pool ball tracking window')
     parser.add_argument('--camera', type=int, default=0)
     parser.add_argument('--video')
     parser.add_argument('--photos')
@@ -302,12 +211,9 @@ def main():
                         help='a pixel on bare cloth in the first frame')
     parser.add_argument('--start', type=float, default=0.0, help='video: start this many seconds in')
     parser.add_argument('--end', type=float, default=None, help='video: stop at this many seconds')
-    parser.add_argument('--speed', type=float, default=1.0,
-                        help='video playback speed, e.g. 2 = twice real time')
-    parser.add_argument('--mid-game', action='store_true',
-                        help='the video starts part-way through a game: take the ball counts from the first board')
-    parser.add_argument('--first-player-colour', choices=['red', 'yellow'],
-                        help='with --mid-game: the colour the first named player is on')
+    parser.add_argument('--speed', type=float, default=1.0, help='video playback speed, e.g. 2 = twice real time')
+    parser.add_argument('--table-edge-trim', type=int, default=None,
+                        help='override config.TABLE_EDGE_TRIM (about 41 for a high, far camera angle)')
     parser.add_argument('--moving-camera', action='store_true',
                         help='the camera may be moved or bumped: find the table again before each board reading')
     parser.add_argument('--record', metavar='PATH', help='also save the window as a video (.mp4)')
@@ -315,6 +221,8 @@ def main():
                         help='no window (use with --record): process the whole video and stop')
     args = parser.parse_args()
 
+    if args.table_edge_trim is not None:
+        config.TABLE_EDGE_TRIM = args.table_edge_trim
     next_frame, fps, play_fps, calibration_frame = open_source(args)
     photo_mode = args.photos is not None
 
@@ -324,72 +232,54 @@ def main():
     watcher = BoardWatcher(calibration_frame if calibration_frame is not None else frame, args.click, fps,
                            args.moving_camera)
 
-    game = GameState()
-    truth_log = GroundTruthLog()
-    history = []                       # copies of the game before each shot, for undo
     message = ''
     paused = False
     first = True
+    finished = False
     next_show_time = time.time()
-    joined_mid_game = False
     writer = None
-    frames_played = 0
 
     if not args.headless:
-        cv2.namedWindow('Pool', cv2.WINDOW_NORMAL)
+        cv2.namedWindow('Pool tracking', cv2.WINDOW_NORMAL)
 
     while True:
-        if first or not paused:
+        if (first or not paused) and not finished:
             if not first:
                 new_frame = next_frame()
                 if new_frame is None:
-                    message = 'end of input'
+                    finished = True
                     paused = True
+                    message = 'end of video'
                 else:
                     frame = new_frame
-                    frames_played = frames_played + 1
             first = False
 
-            if message != 'end of input':
+            if not finished:
                 try:
                     if photo_mode:
-                        # Photos have no motion to measure and may each be from a different
-                        # angle: find the table every time and treat each photo as one shot.
+                        # Photos have no motion to measure and may each be from a different angle:
+                        # find the table every time and show what is on it.
                         watcher.calibrate(frame)
                         reading = board_reading.read_board(frame, watcher.reference,
                                                            watcher.click_x, watcher.click_y)
-                        result = watcher.commit(reading, shot_happened=True)
+                        watcher.commit(reading, shot_happened=True)
                         watcher.status = 'settled'
                         paused = True                 # wait for space before the next photo
                     else:
-                        result = watcher.update(frame)
+                        watcher.update(frame)
                 except Exception as error:            # e.g. the table cannot be found
-                    message = f"error: {error}"[:40]
-                    result = None
+                    message = f"error: {error}"[:60]
 
-                # Picking up a game in progress: the first kept board sets the ball counts.
-                if args.mid_game and not joined_mid_game and watcher.committed_balls is not None:
-                    counts = board_reading.count_colours(watcher.committed_balls)
-                    game.start_mid_game(counts['red'], counts['yellow'], args.first_player_colour)
-                    joined_mid_game = True
-
-                if result is not None and game.winner is None:
-                    history.append(copy.deepcopy(game))
-                    shooter = game.current
-                    event = game.apply_shot(result['potted'], result['note'])
-                    truth_log.write('system', game.shot_number, game.players[shooter],
-                                    result['potted'], event['fouls'], result['note'])
-
-        picture = render(frame, watcher, game, truth_log, message)
+        picture = render(frame, watcher, message)
         if args.record and (not paused or writer is None):
             if writer is None:
                 writer = open_recording(args.record, picture, fps)
             writer.write(picture)
         if args.headless:
-            if message == 'end of input':
+            if finished:
                 break
             continue
-        cv2.imshow('Pool', picture)
+        cv2.imshow('Pool tracking', picture)
 
         # Hold each video frame until its time comes, so the video plays at real speed.
         wait_ms = 30 if paused else 1
@@ -399,47 +289,18 @@ def main():
         key = cv2.waitKey(wait_ms) & 0xFF
         if key in (ord('q'), 27):
             break
-        elif key == ord(' '):
+        elif key == ord(' ') and not finished:
             paused = not paused
-            if message in ('paused', ''):
-                message = 'paused' if paused else ''
-        elif key == ord('u'):
-            if history:
-                game = history.pop()
-                message = 'undid last shot'
-        elif key == ord('s'):
-            history.append(copy.deepcopy(game))
-            game.current = 1 - game.current
-            game.visits_left = 1
-            message = 'swapped turn'
-        elif key == ord('n'):
-            game = GameState()
-            watcher.committed_balls = None
-            watcher.shot_since_commit = False
-            history = []
-            message = 'new game'
+            message = 'paused' if paused else ''
         elif key == ord('k'):
             watcher.calibrate(frame, args.click)
             message = 'found table again'
-        elif key == ord('r'):
-            truth_log.pending['red'] = truth_log.pending['red'] + 1
-        elif key == ord('y'):
-            truth_log.pending['yellow'] = truth_log.pending['yellow'] + 1
-        elif key == ord('b'):
-            truth_log.pending['black'] = True
-        elif key == ord('c'):
-            truth_log.pending['cue'] = True
-        elif key in (13, 10):
-            truth_log.save_pending()
-            message = 'truth saved'
-
 
     if writer is not None:
         writer.release()
         print(f"Recording saved to {args.record}")
     if not args.headless:
         cv2.destroyAllWindows()
-    print(f"Log saved to {truth_log.path}")
 
 
 if __name__ == '__main__':

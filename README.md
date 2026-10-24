@@ -5,6 +5,24 @@ This repo contains the source code for our AMME5710 major project
 
 Detects and locates balls on a pool table from photos or video, generates a top-down view, and tracks game events.
 
+---
+
+### Branch: `ben/obstruction-filtering`
+
+**Changes from main:**
+
+1. **Obstruction detection** (`obstruction.py`) - New module that detects arms, hands, cues, and bodies over the table using lump shape analysis (thickness, area, edge contact) rather than simple area thresholds.
+
+2. **Per-ball hidden tracking** - During shots, balls under obstructions are marked as "hidden" and continue coasting without being falsely dropped or potted.
+
+3. **Shadow rejection** - Ball shadows on the cloth no longer misdetect as the black ball. The fix checks saturation: shadows keep the cloth's blue saturation (~190), while the black ball has a grey core (S < 60).
+
+4. **Inverted top-down map** - The GUI map view is flipped 180° to match camera perspective.
+
+**Config tuning:** `config.py` is currently tuned for `IMG_7429.MOV`. Other videos may require re-tuning parameters like `TABLE_EDGE_TRIM`, `DARK_MAX_VALUE`, `PEAK_MIN_RATIO`, etc.
+
+---
+
 ## How It Works
 
 ### Detection Pipeline
@@ -128,7 +146,8 @@ Outputs: `_tracked.mp4` (annotated video), `_state_N.jpg` (each board state), `_
 
 **Game window:**
 ```bash
-python gui.py --video "path/to/video.mp4" --players Ben Natalie
+python gui.py --video "path/to/video.mp4"
+python gui.py --video "path/to/video.mp4" --start 30 --speed 2  # start at 30s, 2x speed
 python gui.py                            # webcam / iPhone
 python gui.py --photos "Table images"    # still photos, space = next
 ```
