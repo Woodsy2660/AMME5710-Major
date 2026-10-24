@@ -1,6 +1,6 @@
 """
 Contains every number for tuning, other files stay readable 
-colour values use OpenCV's HLS scale: Hue 0-180, Lightness 0-255, Saturation 0-255.
+colour values use OpenCV's HSV scale: Hue 0-180, Saturation 0-255, Value 0-255.
 
 """
 # Rectangle for table mask
@@ -24,9 +24,9 @@ YELLOW_HUE_TOLERANCE = 16
 MIN_COLOUR_SATURATION = 100
 WHITE_MAX_SATURATION = 100
 WHITE_MIN_VALUE = 150
-DARK_MAX_VALUE = 70
-WHITE_FRACTION_FOR_CUE = 0.45
-DARK_FRACTION_FOR_BLACK = 0.45
+DARK_MAX_VALUE = 120              # a pixel darker than this (V) counts as dark; the black ball body is V 50-120
+WHITE_FRACTION_FOR_CUE = 0.45     # used by ball_colour.classify_ball (photo pipeline only)
+DARK_FRACTION_FOR_BLACK = 0.45    # used by ball_colour.classify_ball (photo pipeline only)
 
 # Blob shape filters
 MIN_AREA_RATIO = 0.35
@@ -34,12 +34,19 @@ MIN_THICKNESS_RATIO = 0.55
 MAX_EDGE_BLOB_AREA_RATIO = 6.0    # a bite out of the cloth outline bigger than this is a pocket or rail, not balls
 
 # Finding ball centres inside a blob (ball_detection.py)
-MIN_COLOUR_FRACTION = 0.35        # a centre needs this much of its colour in the disc round it
-PEAK_MIN_RATIO = 0.20             # a colour patch thinner than this fraction of a radius is not a ball
+MIN_COLOUR_FRACTION = 0.5         # CHANGED (was 0.35). A real ball has 0.85+ of its colour in the disc; the dark pocket between
+                                  # three touching balls has under 0.5, so this stops it becoming a black ball
+PEAK_MIN_RATIO = 0.30             # CHANGED (was 0.20). This camera is high (26 deg at the centre, 58 deg near): a ball hidden
+                                  # behind another still shows 0.9 r, so 0.3 is safe and drops the thin shadow slivers (0.2-0.3 r)
 WEAK_PEAK_RATIO = 0.70            # thinner than this = a "sliver": a ball mostly hidden behind another
 SAME_BALL_ON_MAP = 1.5            # two centres closer than this many radii ON THE MAP are one ball
 SAME_SLIVER_IN_PHOTO = 1.5        # two sliver centres closer than this many radii in the photo are one sliver
 CLOSE_KERNEL_RATIO = 0.5          # closing kernel (fraction of a radius) that fills the highlight on a ball
+
+# Black ball vs cue ball vs shadows (ball_detection.py colour_at)
+BLACK_MIN_DARK_FRACTION = 0.15    # a dark-or-white ball with at least this much dark in its disc is the black ball, else the cue
+BLACK_MAX_SATURATION = 60         # a dark pixel this colourless (grey) belongs to the black ball; a shadow on blue cloth stays saturated
+BLACK_MIN_COLOURLESS_SHARE = 0.15 # a dark patch is the black ball only if at least this share of its dark pixels is colourless
 
 # Corner orientation override (None = auto-detect)
 FIRST_SIDE_IS_LONG = None
@@ -50,13 +57,15 @@ FIRST_SIDE_IS_LONG = None
 SIGNAL_SCALE = 0.5                # frames are shrunk by this before measuring motion (speed)
 MOVING_PIXEL_DIFF = 25            # grey-level change between two frames that counts as "moving"
 MOVE_HIGH_FRACTION = 0.002        # moving pixels above this: a shot is in progress
-MOVE_LOW_FRACTION = 1e-5          # moving pixels below this: still
+MOVE_LOW_FRACTION = 0.0005        # CHANGED (was 1e-5 = 1 px). Measured on Video 4: a still table gives 0 px at the median but
+                                  # up to 71 px at the 99th percentile (sensor noise). 0.0005 = 68 px here; a shot gives 375+
 HOLD_FRAMES = 15                  # still for this many frames in a row before the table counts as settled
-TABLE_EDGE_TRIM = 15             # px (at SIGNAL_SCALE) trimmed off the table edge for the motion / blocked tests.
-                                  # 15 suits close angles (Testing-sink); a high far angle that sees the shaded cushion
-                                  # faces (IMG_0711) needs about 41, or every frame counts as 'view blocked'
-OCCLUDER_BIG_FRACTION = 0.024     # a non-cloth lump bigger than this is a person, arm or cue
-OCCLUDER_EDGE_FRACTION = 0.012    # ... or bigger than this and touching the table edge (arms come in from outside)
+TABLE_EDGE_TRIM = 15             # CHANGED (was 41). px (at SIGNAL_SCALE) trimmed off the table edge for the motion / blocked tests.
+                                  # Video 4 is clear at 15 (checked on four clear frames); the only non-cloth near the edge is the
+                                  # pocket mouths, which obstruction.py drops as ball-sized. Keep 41 only for IMG_0711.
+# OCCLUDER_BIG_FRACTION / OCCLUDER_EDGE_FRACTION: no longer used once obstruction.py is in (delete when the old view_is_blocked goes)
+OCCLUDER_BIG_FRACTION = 0.024
+OCCLUDER_EDGE_FRACTION = 0.012
 READ_EVERY = 15                   # frames between two readings of the board (0.5 s at 30 fps)
 REFIND_AREA_TOLERANCE = 0.25      # moving camera: a re-found table more than 25% bigger/smaller than the first is a failed detection
 REFIND_MAX_CORNER_SHIFT = 120     # moving camera: a re-found corner further than this (px) from the last one is a failed detection
@@ -80,14 +89,30 @@ MIN_TRACK_PEAK_RATIO = 0.5  # tracking: a colour patch thinner than this many ra
 MAX_TRACK_PEAK_RATIO = 1.4  # tracking: a colour patch thicker than this many radii is a hand or arm, not a ball
 CUE_RELEASE_FRAMES = 2      # tracking: the cue ball is free to move once it is missing from its small window this many frames
 CUE_MAX_SATURATION = 55     # tracking: cue-ball pixels are whiter than this (HSV saturation); skin is about 65-90
-TRACK_PAUSE_OCCLUDER_FRACTION = 0.10  # tracking pauses while something this big (fraction of the table) lies over 2+ balls (a person over the balls; aiming is under 4%)
+TRACK_PAUSE_OCCLUDER_FRACTION = 0.10  # no longer used once obstruction.hidden_balls is in (per-ball hidden flags replace the pause)
 
 POCKETS = {'top-left': (0, 0), 'top-middle': (MAP_WIDTH / 2, 0), 'top-right': (MAP_WIDTH, 0),
            'bottom-left': (0, MAP_HEIGHT), 'bottom-middle': (MAP_WIDTH / 2, MAP_HEIGHT),
            'bottom-right': (MAP_WIDTH, MAP_HEIGHT)}
 
-AGREE_TOLERANCE = 1.0             # two readings agree if every ball is within this many map radii
 # Game rules and scoring (game_state.py, board_watcher.py)
 BALLS_PER_COLOUR = 7              # blackball pool: 7 red, 7 yellow, 1 black, 1 cue
 FOUL_GIVES_TWO_VISITS = True      # after a foul the other player gets two visits (pub rules)
 
+# -----------------------------------------------------------------------------
+# Obstruction detection (obstruction.py)
+# -----------------------------------------------------------------------------
+# Lump classification thresholds (in ball radii / ball areas)
+THICK_RADII = 1.5                 # thickness > this = arm/hand/body
+THIN_RADII = 0.6                  # opening kernel radius for thin part detection
+THIN_MIN_BALLS = 1.0              # thin part area > this = cue/fingers
+EDGE_CONTACT_RADII = 4.0          # edge contact length > this = hand reaching in
+EDGE_MIN_BALLS = 3.0              # edge contact area > this many ball areas
+EDGE_RING_WIDTH = 7               # px width of edge detection ring at SIGNAL_SCALE. CHECK: must equal the real width of
+                                  # reference['edge_small'] = count_nonzero(edge_small) / hull perimeter. Built with a 7x7
+                                  # erosion the ring is about 3.5 px wide, and 7 here halves every edge-contact measurement.
+HUGE_BALLS = 15.0                 # area > this = huge obstruction
+HIDDEN_DILATE_PX = 10             # dilate lump mask by this many px for hidden ball check
+CLEAR_FRAMES = 5                  # blocked->clear requires this many clear frames
+SHADOW_MIN_SATURATION = 40        # shadows keep cloth hue with at least this saturation
+CAMERA_SHIFT_FRAMES = 3           # camera shift must persist this many frames

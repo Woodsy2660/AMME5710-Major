@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3:*)",
+      "Bash(ls:*)",
+      "Bash(git reset:*)",
+      "Bash(git add:*)",
+      "Bash(git diff HEAD -- *.py README.md .gitignore)",
+      "Bash(pip install:*)",
+      "Bash(git fetch:*)",
+      "Bash(git checkout:*)",
+      "Bash(git stash:*)",
+      "Bash(git merge:*)",
+      "Bash(cd:*)",
+      "Bash(python -c:*)"
+    ]
+  }
+}

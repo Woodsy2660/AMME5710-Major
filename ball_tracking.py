@@ -20,6 +20,7 @@ def initialise_tracking(frame, t):
                            'seen_x': ball['map_x'], 'seen_y': ball['map_y'], 'seen_t': t,
                            'missed': 0, 'vanish': None, 'lost': False,
                            'free': False,   # may move away from where it is (see free_hit_balls)
+                           'hidden': False, # ball is under an obstruction (arm, cue, body)
                            'path': [(ball['map_x'], ball['map_y'], True)]}
     return tracked_balls
 
@@ -173,7 +174,16 @@ def track_frame(tracks, frame_bgr, t, frame_dt, reference):
 
         for ball_id in ids:
             if ball_id not in matched:
-                event = coast(ball_id, tracks[ball_id], windows[ball_id][:2])
+                track = tracks[ball_id]
+                # A hidden ball coasts without being dropped - obstruction is temporary
+                if track.get('hidden', False):
+                    predicted = windows[ball_id][:2]
+                    track['x'], track['y'] = predicted
+                    track['path'].append((predicted[0], predicted[1], False))
+                    track['vx'] *= 0.95  # Velocity decays while hidden
+                    track['vy'] *= 0.95
+                    continue
+                event = coast(ball_id, track, windows[ball_id][:2])
                 if event:
                     events.append(event)
     return windows, events

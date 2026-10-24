@@ -52,13 +52,17 @@ def make_ball(colour, photo_x, photo_y, radius, to_map, visible):
 
 def colour_at(image_hsv, centre_x, centre_y, radius, family):
     """
-    Checks the colour in a disc round a candidate centre. 
-    inputs: 
+    Checks the colour in a disc round a candidate centre.
+    inputs:
     - image_hsv: the frame in HSV
     - centre_x, centre_y, radius: the disc (about half the ball radius)
-    - family: the mask the centre came from ('red', 'yellow' ...)
+    - family: the mask the centre came from ('red', 'yellow', 'darkwhite')
     Output:
-    - 'red', 'yellow', 'cue', 'black', or None if the disc does not hold enough colour 
+    - 'red', 'yellow', 'cue', 'black', or None if the disc does not hold enough colour
+
+    For darkwhite: a shadow on the cloth is dark but keeps the cloth's saturation (~190);
+    the black ball has a grey core (S < 60). Measured colourless share of dark pixels:
+    0.28-0.76 on the black ball, 0.00 on every shadow.
     """
     image_height, image_width = image_hsv.shape[:2]
     y0 = max(0, int(centre_y - radius))
@@ -68,7 +72,8 @@ def colour_at(image_hsv, centre_x, centre_y, radius, family):
     ys, xs = np.mgrid[y0:y1, x0:x1]
     inside = (xs - centre_x) ** 2 + (ys - centre_y) ** 2 <= radius * radius
 
-    labels = ball_colour.label_pixels(image_hsv[ys[inside], xs[inside]])
+    pixels = image_hsv[ys[inside], xs[inside]]
+    labels = ball_colour.label_pixels(pixels)
     white_fraction = np.mean(labels == ball_colour.WHITE)
     dark_fraction = np.mean(labels == ball_colour.DARK)
     red_fraction = np.mean(labels == ball_colour.RED)
@@ -78,10 +83,17 @@ def colour_at(image_hsv, centre_x, centre_y, radius, family):
         return 'red' if red_fraction > config.MIN_COLOUR_FRACTION else None
     if family == 'yellow':
         return 'yellow' if yellow_fraction > config.MIN_COLOUR_FRACTION else None
+
+    # darkwhite branch: distinguish cue ball, black ball, and shadows
     if white_fraction + dark_fraction < config.MIN_COLOUR_FRACTION:
         return None
-    if white_fraction > dark_fraction:
-        return 'cue'
+    if dark_fraction < config.BLACK_MIN_DARK_FRACTION:
+        return 'cue'                                      # bright, no dark pixels
+    dark = labels == ball_colour.DARK
+    colourless = dark & (pixels[:, 1] < config.BLACK_MAX_SATURATION)
+    colourless_share = np.sum(colourless) / max(1, np.sum(dark))
+    if colourless_share < config.BLACK_MIN_COLOURLESS_SHARE:
+        return None                                       # dark but still cloth-coloured: a shadow
     return 'black'
 
 def find_centres(colour_mask, radius, to_map, offset_x, offset_y):

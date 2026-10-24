@@ -21,6 +21,7 @@ import board_reading
 import table_mask
 import top_down
 from shot_detection import shrink_to_gray, moving_pixels, update_detector, view_is_blocked
+import obstruction
 
 
 POCKET_SHORT_NAMES = {'top-left': 'TL', 'top-middle': 'TM', 'top-right': 'TR',
@@ -108,6 +109,9 @@ class BoardWatcher:
         self.last_tracks = None
         self.camera_was_moved = False
         self.shift_window = None
+        # Obstruction detection filters (from obstruction.py)
+        self.blocked_filter = obstruction.new_blocked_filter()
+        self.lump_mask = None  # Stored for per-ball hidden detection during shots
 
     # def read(self, frame):
     #     """The ball list for one frame."""
@@ -125,6 +129,16 @@ class BoardWatcher:
         self.status_note = None
         gray = shrink_to_gray(frame)
         moving = moving_pixels(gray, self.previous_gray, self.reference)
+
+        # Obstruction detection - get lump mask for per-ball hidden detection
+        # Wrapped in try/except so original tracking still works if obstruction module fails
+        try:
+            self.lump_mask, lumps = obstruction.unexplained_lumps(frame, self.reference)
+            blocked_now = obstruction.view_is_blocked(lumps)
+            obstruction.update_blocked(self.blocked_filter, blocked_now)
+        except Exception:
+            self.lump_mask = None  # Fall back if obstruction detection fails
+
         camera_moving = self.camera_moved(gray)
         self.previous_gray = gray
         if camera_moving:
@@ -150,6 +164,19 @@ class BoardWatcher:
             if not was_shot and self.committed_balls is not None:
                 self.tracks = initialise_tracking(self.committed_balls, t)
                 self.last_tracks = None
+
+            # Mark each ball as hidden or visible based on the obstruction mask.
+            # A hidden ball continues to coast and won't be falsely marked as potted.
+            if self.tracks is not None and self.lump_mask is not None:
+                try:
+                    occluder = obstruction.occluder_mask(self.lump_mask)
+                    tracks_as_balls = [{'map_x': t['x'], 'map_y': t['y']} for t in self.tracks.values() if not t['lost']]
+                    hidden_flags = obstruction.hidden_balls(tracks_as_balls, occluder, self.reference)
+                    visible_tracks = [t for t in self.tracks.values() if not t['lost']]
+                    for track, is_hidden in zip(visible_tracks, hidden_flags):
+                        track['hidden'] = is_hidden
+                except Exception:
+                    pass  # Fall back to no hidden detection if it fails
 
             # Someone leaning right over the balls hides them and their clothes can look like
             # balls: hold every ball where it is until they move away. (A player bent over a

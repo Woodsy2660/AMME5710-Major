@@ -213,6 +213,8 @@ def draw_live_map(balls):
         if not ball['seen']:
             centre = (int(border + ball['map_x']), int(border + ball['map_y']))
             cv2.circle(picture, centre, int(round(config.BALL_RADIUS_ON_MAP)) + 1, colour, 2, cv2.LINE_AA)
+    # Flip 180 degrees to match camera perspective
+    picture = cv2.flip(picture, -1)
     return picture
 
 
