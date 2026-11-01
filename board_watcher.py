@@ -72,6 +72,27 @@ def shot_result(balls_before, balls_after):
     return potted, ', '.join(pockets)
 
 
+def one_of_each(balls, previous):
+    """
+    There is one black and one cue ball. If a reading has more (a shadow or a hand read as a
+    second black), keep the one nearest where that ball was last seen, or else the most
+    ball-like one.
+    """
+    kept = [ball for ball in balls if ball['colour'] not in ('black', 'cue')]
+    for colour in ('black', 'cue'):
+        found = [ball for ball in balls if ball['colour'] == colour]
+        if len(found) <= 1:
+            kept += found
+            continue
+        last = [ball for ball in (previous or []) if ball['colour'] == colour]
+        if last:
+            best = min(found, key=lambda b: np.hypot(b['map_x'] - last[0]['map_x'], b['map_y'] - last[0]['map_y']))
+        else:
+            best = max(found, key=lambda b: b.get('visible', 0))
+        kept.append(best)
+    return kept
+
+
 class BoardWatcher:
 
     def __init__(self, first_frame=None, click=None, fps = 30.0, moving_camera=False):
@@ -84,6 +105,7 @@ class BoardWatcher:
         self.moving_camera = moving_camera
         self.committed_balls = None          # the last kept board state
         self.status_note = None              # e.g. 'player over table' while tracking is paused
+        self.ball_in_hand = False            # after a scratch, until the next real shot
         self.shot_since_commit = False       # has the table seen a shot since then?
         self.status = 'settling'
         if first_frame is not None:
@@ -117,13 +139,17 @@ class BoardWatcher:
     #     """The ball list for one frame."""
     #     return run_video.read_board(frame, self.reference, self.click_x, self.click_y)
 
-    def update(self, frame):
+    def update(self, frame, t=None):
         """
         Call once per video frame. Follows run_video.main(), steps 1-4.
+        t : the frame's time in seconds. Leave out for a recording (worked out from the frame
+            number); give the real clock time for a live camera, which drops frames when the
+            processing falls behind, so frame numbers no longer match time.
         Output: None, or a dict {'potted', 'note'} when a shot has just finished.
         """
 
-        t = self.frame_index / self.fps # TO DO dont hardcode fps = 30
+        if t is None:
+            t = self.frame_index / self.fps
         self.frame_index = self.frame_index + 1
         # Count the moving pixels on a small grayscale version of the frame, to detect a shot.
         self.status_note = None
@@ -334,8 +360,15 @@ class BoardWatcher:
         balls = []
         to_map = self.reference['to_map']
         to_photo = self.reference['to_photo']
+        hide_after = config.DISPLAY_GONE_SECONDS * self.fps
         for track in tracks.values():
             if track['lost']:
+                continue
+            # A ball that was moving (or was knocked) and has been missing for a while with nothing
+            # over it: most likely potted (a ball that rolled in
+            # unseen, or vanished just short of a pocket). It is not drawn; if it is in fact still
+            # on the table it comes back with the next board reading.
+            if track['free'] and track['missed'] > hide_after and not track.get('hidden', False):
                 continue
             photo_x, photo_y = top_down.move_point(to_photo, track['seen_x'], track['seen_y'])
             radius = top_down.ball_radius_in_photo(to_map, to_photo, photo_x, photo_y)
@@ -357,12 +390,40 @@ class BoardWatcher:
             self.shot_since_commit = shot_happened
 
         before = self.committed_balls
+        balls = one_of_each(balls, before)
         self.committed_balls = balls
         if before is None:
             return None                       # first view of the table
         if not self.shot_since_commit:
             return None                       # view was blocked then cleared: not a shot
         self.shot_since_commit = False
+
+        # On video, a shot needs the cue ball to have been struck. If the tracker did not see that:
+        # - the cue ball was off the table before (ball in hand after a scratch): this is the
+        #   player placing it by hand, so the board is kept but nothing is scored (a hand over the
+        #   table while placing it can also hide a ball, which must not count as potted)
+        # - only the cue ball moved: it was moved by hand, not struck
+        # - after a scratch the player has the cue ball in hand: until a shot moves or pots
+        #   another ball, any change where only the cue ball moved is still it being placed
+        #   (the tracker can mistake a hand carrying it for a strike)
+        tracks = self.tracks if self.tracks is not None else self.last_tracks
+        if shot_happened is None:
+            others_before = [b for b in before if b['colour'] != 'cue']
+            others_after = [b for b in balls if b['colour'] != 'cue']
+            reach = config.MOVED_RADII * config.BALL_RADIUS_ON_MAP
+            # every other ball is still where it was (a ball that only reappears, after being
+            # hidden by a hand in the last reading, does not count as moved)
+            only_cue_moved = not board_reading.match_balls(others_before, others_after, reach)
+            struck = tracks is not None and 'cue' in tracks and tracks['cue']['free']
+            if capped_counts(before)['cue'] == 0:
+                self.ball_in_hand = True
+                if not struck:
+                    return None
+            if self.ball_in_hand and only_cue_moved:
+                return None
+            if not struck and only_cue_moved:
+                return None
+            self.ball_in_hand = False
 
         # Movement over the table (a player leaning in to aim, then stepping back) is
         # only a shot if the balls ended up somewhere else.
@@ -377,6 +438,7 @@ class BoardWatcher:
             return None
 
         potted, note = shot_result(before, balls)
+        potted, note = self.use_tracker_pots(potted, note)
 
         # After a scratch the next player puts the cue ball back by hand. The hand
         # movement looks like a shot, but only the cue ball came back: not a shot.
@@ -385,4 +447,30 @@ class BoardWatcher:
         if cue_placed_back and nothing_potted:
             return None
 
-        return {'potted': potted, 'note': note}
+        # What the cue ball hit first, from the tracker (for the 'no ball hit' / 'wrong ball
+        # first' fouls). Unknown (None for both) if the shot was not tracked.
+        tracks = self.tracks if self.tracks is not None else self.last_tracks
+        tracked = tracks is not None and 'cue' in tracks and tracks['cue']['free']
+        # Did any ball other than the cue ball move or go down? Checked on the two kept boards,
+        # so a contact the tracker missed cannot turn into a 'no ball hit' foul.
+        others_before = [b for b in before if b['colour'] != 'cue']
+        others_after = [b for b in balls if b['colour'] != 'cue']
+        balls_moved = bool(board_reading.match_balls(others_before, others_after,
+                                                     config.MOVED_RADII * config.BALL_RADIUS_ON_MAP))
+        return {'potted': potted, 'note': note, 'tracked': tracked, 'balls_moved': balls_moved,
+                'first_hit': ball_tracking.first_contact(tracks) if tracked else None}
+
+    def use_tracker_pots(self, potted, note):
+        """
+        The board counts say how many balls went down, but a ball misread in a cluster (a yellow
+        counted as a red) can put the wrong colour down. The tracker saw which balls actually
+        went into a pocket. When it saw as many coloured balls go down as the counts say, its
+        colours (and pockets) are used instead.
+        """
+        seen = [(colour, pocket) for colour, pocket in self.pot_events if colour in ('red', 'yellow')]
+        if not seen or len(seen) != potted['red'] + potted['yellow']:
+            return potted, note
+        potted = dict(potted, red=sum(c == 'red' for c, _ in seen), yellow=sum(c == 'yellow' for c, _ in seen))
+        others = [part for part in note.split(', ') if part and part.split(' ')[0] in ('black', 'cue')]
+        note = ', '.join([f"{c} {POCKET_SHORT_NAMES[p]}" for c, p in seen] + others)
+        return potted, note

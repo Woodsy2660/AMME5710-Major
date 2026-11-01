@@ -32,6 +32,7 @@ DARK_FRACTION_FOR_BLACK = 0.45    # used by ball_colour.classify_ball (photo pip
 MIN_AREA_RATIO = 0.35
 MIN_THICKNESS_RATIO = 0.55
 EDGE_YELLOW_MIN_SATURATION = 150  # a yellow against a cushion must be this saturated (yellow balls 200+, skin on the rail about 70-140)
+EDGE_CUE_MIN_PEAK = 0.6           # a white patch against a cushion must be this round (peak / radius) to be the cue ball
 SHADOW_BLACK_RADII = 1.2          # a 'black' closer than this many radii to a red/yellow is that ball's shaded side
 MAX_EDGE_BLOB_AREA_RATIO = 6.0    # a bite out of the cloth outline bigger than this is a pocket or rail, not balls
 
@@ -90,6 +91,10 @@ TRACK_MAX_SPEED = 2500.0    # tracking: map px/s; a match further than a ball co
 MIN_TRACK_PEAK_RATIO = 0.5  # tracking: a colour patch thinner than this many radii is the cue stick or its tip, not a ball
 MAX_TRACK_PEAK_RATIO = 1.4  # tracking: a colour patch thicker than this many radii is a hand or arm, not a ball
 CUE_RELEASE_FRAMES = 2      # tracking: the cue ball is free to move once it is missing from its small window this many frames
+KNOCKED_FRAMES = 4          # tracking: a still ball missing this many frames while others roll (and not under an arm) was knocked
+POCKET_GONE_FRAMES = 15     # tracking: a ball gone this many frames at a pocket mouth is potted, however slowly it was rolling
+POCKET_LOOKAHEAD = 0.4     # tracking: s; a ball that vanishes heading into a pocket within this time is potted
+DISPLAY_GONE_SECONDS = 0.5 # GUI: a tracked ball missing this long, with nothing over it, is no longer drawn (it has most likely gone down)
 CUE_MAX_SATURATION = 55     # tracking: cue-ball pixels are whiter than this (HSV saturation); skin is about 65-90
 TRACK_PAUSE_OCCLUDER_FRACTION = 0.10  # no longer used once obstruction.hidden_balls is in (per-ball hidden flags replace the pause)
 
@@ -98,6 +103,8 @@ POCKETS = {'top-left': (0, 0), 'top-middle': (MAP_WIDTH / 2, 0), 'top-right': (M
            'bottom-right': (MAP_WIDTH, MAP_HEIGHT)}
 
 # Game rules and scoring (game_state.py, board_watcher.py)
+CONTACT_RADII = 2.5               # the cue ball 'reached' a ball when its path came this close (radii; touching = 2)
+MOVED_RADII = 1.5                 # a ball 'moved' (was hit) if it ended this far from where it started (radii)
 SHOT_MIN_MOVE_RADII = 2.5         # a shot moved at least one ball further than this (map radii); smaller changes are measurement wobble
 BALLS_PER_COLOUR = 7              # blackball pool: 7 red, 7 yellow, 1 black, 1 cue
 FOUL_GIVES_TWO_VISITS = True      # after a foul the other player gets two visits (pub rules)

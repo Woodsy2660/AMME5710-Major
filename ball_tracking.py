@@ -39,6 +39,7 @@ def see(track, position, t):
         track['vx'] = VELOCITY_BLEND * (x - track['seen_x']) / dt + (1 - VELOCITY_BLEND) * track['vx']
         track['vy'] = VELOCITY_BLEND * (y - track['seen_y']) / dt + (1 - VELOCITY_BLEND) * track['vy']
 
+    track['max_speed'] = max(track.get('max_speed', 0.0), float(np.hypot(track['vx'], track['vy'])))
     track.update(x=x, y=y, seen_x=x, seen_y=y, seen_t=t, missed=0, vanish=None)
     track['path'].append((x, y, True))
 
@@ -59,17 +60,31 @@ def coast(ball_id, track, predicted):
     track['missed'] += 1
     if track['missed'] == 1:
         track['vanish'] = predicted                   # first place it should have been, but wasn't
+        # Where it was heading: up to POCKET_LOOKAHEAD seconds along its last velocity.
+        track['heading'] = (track['seen_x'] + track['vx'] * config.POCKET_LOOKAHEAD,
+                            track['seen_y'] + track['vy'] * config.POCKET_LOOKAHEAD)
     track['x'], track['y'] = predicted
     track['path'].append((predicted[0], predicted[1], False))
 
     if not track['free']:
         return None              # still and not hit: it is hidden (arm, cue, person), not gone
     speed = np.hypot(track['vx'], track['vy'])
-    if track['missed'] <= MAX_COAST_FRAMES or speed < DROP_MIN_SPEED:
-        return None
-
     pocket, distance = closest_pocket([(track['seen_x'], track['seen_y']), track['vanish']])
+    # A fast ball can vanish several radii short of a pocket (motion blur): it is also at the
+    # pocket if the line it was rolling along runs into one.
+    heading = track.get('heading')
+    if heading is not None:
+        for name, (pocket_x, pocket_y) in POCKETS.items():
+            along = distance_to_segment(pocket_x, pocket_y, track['seen_x'], track['seen_y'], heading[0], heading[1])
+            if along < distance:
+                pocket, distance = name, along
     near_pocket = distance < POCKET_ZONE_RADII * config.BALL_RADIUS_ON_MAP
+    if track['missed'] <= MAX_COAST_FRAMES:
+        return None
+    # A ball that rolled slowly into a pocket looks slow when it vanishes, but it is gone all
+    # the same: one that disappears at a pocket and stays gone is potted, whatever its speed.
+    if speed < DROP_MIN_SPEED and not (near_pocket and track['missed'] > config.POCKET_GONE_FRAMES):
+        return None
     if track['colour'] == 'cue' and not near_pocket:
         # There is only one cue ball, so rather than give up on it (a fast cue ball is blurred and
         # often missed), stop predicting and keep searching round where it was last seen: its
@@ -82,12 +97,64 @@ def coast(ball_id, track, predicted):
         return '%s potted in the %s pocket' % (ball_id, pocket)
     return '%s lost (last seen at map %.0f, %.0f)' % (ball_id, track['seen_x'], track['seen_y'])
 
+def note_cue_contacts(tracks, t):
+    """
+    Records, for every other ball, the first time the cue ball's path came within CONTACT_RADII
+    of where that ball started the shot (two touching balls are 2 radii apart). The whole step
+    since the last frame is checked, as a fast cue ball can travel several radii between frames.
+    """
+    cue = tracks.get('cue')
+    if cue is None or not cue['free']:
+        return
+    last = cue.get('contact_from')
+    now = (cue['x'], cue['y'])
+    cue['contact_from'] = now
+    if last is None:
+        return
+    reach = config.CONTACT_RADII * config.BALL_RADIUS_ON_MAP
+    for ball_id, track in tracks.items():
+        if ball_id == 'cue' or 'cue_contact_t' in track:
+            continue
+        home_x, home_y = track['path'][0][0], track['path'][0][1]
+        if distance_to_segment(home_x, home_y, last[0], last[1], now[0], now[1]) < reach:
+            track['cue_contact_t'] = t
+
+
+def ball_moved(track):
+    """True if a ball left where it started the shot (it was hit), or went down a pocket."""
+    if track['lost']:
+        return True
+    home_x, home_y = track['path'][0][0], track['path'][0][1]
+    return np.hypot(track['seen_x'] - home_x, track['seen_y'] - home_y) > config.MOVED_RADII * config.BALL_RADIUS_ON_MAP
+
+
 def first_contact(tracks):
     """
-    Returns the first ball that was hit by the cue ball
+    The colour of the first ball the cue ball hit this shot: of the balls the cue ball reached
+    (note_cue_contacts) that then actually moved, the one it reached first. None if it hit nothing
+    (or the cue ball never moved).
     """
-    # first one the move from its origin
-    return None
+    if tracks is None or 'cue' not in tracks or not tracks['cue']['free']:
+        return None
+    hit = [(track['cue_contact_t'], track['colour']) for ball_id, track in tracks.items()
+           if ball_id != 'cue' and 'cue_contact_t' in track and ball_moved(track)]
+    return min(hit)[1] if hit else None
+
+def free_knocked_balls(tracks):
+    """
+    A still ball can be knocked by a ball the tracker lost sight of, so free_hit_balls never sees
+    the contact. If a still ball has vanished from its small window for KNOCKED_FRAMES frames while
+    something else on the table is rolling, and nothing (an arm, the cue) is over it, it was hit:
+    free it, so its window grows and it is followed from here.
+    """
+    rolling = any(track['free'] and not track['lost'] and track['missed'] == 0 for track in tracks.values())
+    if not rolling:
+        return
+    for track in tracks.values():
+        if not track['free'] and not track['lost'] and not track.get('hidden', False) \
+                and track['missed'] >= config.KNOCKED_FRAMES:
+            track['free'] = True
+
 
 def free_hit_balls(tracks):
     """
@@ -135,6 +202,7 @@ def track_frame(tracks, frame_bgr, t, frame_dt, reference):
     - events : list of strings (pots, lost balls)
     """
     free_hit_balls(tracks)
+    free_knocked_balls(tracks)
     windows = {}
     candidates = {colour: [] for colour in FAMILY}
     for ball_id, track in tracks.items():
@@ -195,6 +263,7 @@ def track_frame(tracks, frame_bgr, t, frame_dt, reference):
                 if event:
                     events.append(event)
     find_cue_anywhere(tracks, frame_bgr, t, reference)
+    note_cue_contacts(tracks, t)
     return windows, events
 
 

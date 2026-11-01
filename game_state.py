@@ -35,12 +35,14 @@ def empty_potted():
 
 class GameState:
 
-    def __init__(self, player_names=('Player 1', 'Player 2')):
+    def __init__(self, player_names=('Player 1', 'Player 2'), totals=None):
+        """totals : balls of each colour in the set, e.g. {'red': 7, 'yellow': 6} if one is missing."""
+        self.totals = dict(totals) if totals else {RED: config.BALLS_PER_COLOUR, YELLOW: config.BALLS_PER_COLOUR}
         self.players = list(player_names)
         self.current = 0                       # index of the player at the table
         self.visits_left = 1                   # 2 after the opponent fouls
         self.groups = [None, None]             # 'red' or 'yellow' once the table is decided
-        self.remaining = {RED: config.BALLS_PER_COLOUR, YELLOW: config.BALLS_PER_COLOUR}
+        self.remaining = dict(self.totals)
         self.fouls = [0, 0]
         self.winner = None                     # index of the winning player
         self.shot_number = 0
@@ -53,8 +55,8 @@ class GameState:
         - first_player_colour : 'red' or 'yellow' if known; otherwise the table stays
           open until the next single-colour pot
         """
-        self.remaining = {RED: min(red_left, config.BALLS_PER_COLOUR),
-                          YELLOW: min(yellow_left, config.BALLS_PER_COLOUR)}
+        self.remaining = {RED: min(red_left, self.totals[RED]),
+                          YELLOW: min(yellow_left, self.totals[YELLOW])}
         if first_player_colour is not None:
             self.groups = [first_player_colour, other_colour(first_player_colour)]
         self.log.append(f"Joined mid-game: {self.remaining[RED]} red, {self.remaining[YELLOW]} yellow left")
@@ -69,13 +71,18 @@ class GameState:
         """How many of their own balls a player has potted so far."""
         if self.groups[player] is None:
             return 0
-        return config.BALLS_PER_COLOUR - self.remaining[self.groups[player]]
+        return self.totals[self.groups[player]] - self.remaining[self.groups[player]]
 
-    def apply_shot(self, potted, note=''):
+    def apply_shot(self, potted, note='', first_hit=None, tracked=False, balls_moved=True):
         """
         Inputs
         - potted : record from empty_potted() describing one shot
         - note : optional extra text for the log, e.g. which pockets
+        - first_hit : colour of the first ball the cue ball hit ('red', 'yellow', 'black'), or None
+        - tracked : True if the shot was followed by the tracker, so first_hit can be trusted
+        - balls_moved : False if no ball other than the cue ball moved or went down (from the
+          boards before and after). 'No ball hit' needs this as well as no contact seen, as the
+          tracker can miss a contact; a first_hit of None with balls moved means 'not known'
         Output
         - event : dict with what happened, also added to self.log as text
             player, potted, fouls (list of reasons), turn_kept, winner
@@ -105,6 +112,17 @@ class GameState:
             fouls.append('cue ball potted')
         if own is not None and down[other_colour(own)] > 0:
             fouls.append('potted opponent ball')
+        if tracked:
+            nothing_potted = red_down + yellow_down == 0 and not potted['black']
+            if first_hit is None:
+                if not balls_moved and nothing_potted:
+                    fouls.append('no ball hit')
+            elif on_the_black and first_hit != 'black':
+                fouls.append('did not hit the black first')
+            elif not on_the_black and first_hit == 'black':
+                fouls.append('hit the black first')
+            elif own is not None and not on_the_black and first_hit != own:
+                fouls.append('hit opponent ball first')
 
         event = {'player': shooter, 'potted': potted, 'fouls': fouls,
                  'turn_kept': False, 'winner': None}
@@ -146,6 +164,9 @@ class GameState:
 
             if potted_something:
                 event['turn_kept'] = True
+                # Two-shot rule: potting on the first of two visits after a foul uses up the
+                # second one (the player carries on as normal while they keep potting).
+                self.visits_left = 1
             elif self.visits_left > 1:
                 self.visits_left = self.visits_left - 1    # use up the free visit
                 event['turn_kept'] = True

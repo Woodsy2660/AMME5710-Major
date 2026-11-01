@@ -54,6 +54,15 @@ def test_potting_opponent_ball_is_foul_and_gives_two_visits():
     assert game.current == 0
 
 
+def test_potting_on_free_visit_loses_the_second_visit():
+    game = GameState()
+    game.apply_shot(shot(cue=True))              # player 0 fouls: player 1 gets two visits
+    game.apply_shot(shot(red=1))                 # player 1 pots with the first: keeps turn ...
+    assert game.current == 1 and game.visits_left == 1
+    game.apply_shot(shot())                      # ... but a miss now ends it
+    assert game.current == 0
+
+
 def test_cue_ball_potted_is_foul():
     game = GameState()
     event = game.apply_shot(shot(cue=True))
@@ -95,6 +104,57 @@ def test_overcount_is_capped():
     game = GameState()
     game.apply_shot(shot(red=9))
     assert game.remaining['red'] == 0
+
+
+def test_no_ball_hit_is_foul():
+    game = GameState()
+    event = game.apply_shot(shot(), first_hit=None, tracked=True, balls_moved=False)
+    assert 'no ball hit' in event['fouls']
+    assert game.current == 1 and game.visits_left == 2
+
+
+def test_missed_contact_is_not_a_foul():
+    # Balls moved (or one was potted) but the tracker missed the contact: unknown, no foul.
+    game = GameState()
+    event = game.apply_shot(shot(yellow=1), first_hit=None, tracked=True, balls_moved=True)
+    assert event['fouls'] == []
+
+
+def test_untracked_shot_is_not_a_foul():
+    game = GameState()
+    event = game.apply_shot(shot(), first_hit=None, tracked=False)
+    assert event['fouls'] == []
+
+
+def test_hitting_opponent_ball_first_is_foul():
+    game = GameState()
+    game.apply_shot(shot(red=1), first_hit='red', tracked=True)       # player 0 is red
+    event = game.apply_shot(shot(), first_hit='yellow', tracked=True)
+    assert 'hit opponent ball first' in event['fouls']
+
+
+def test_hitting_own_ball_first_is_fine():
+    game = GameState()
+    game.apply_shot(shot(red=1), first_hit='red', tracked=True)
+    event = game.apply_shot(shot(red=1), first_hit='red', tracked=True)
+    assert event['fouls'] == [] and game.current == 0
+
+
+def test_hitting_black_first_on_open_table_is_foul():
+    game = GameState()
+    event = game.apply_shot(shot(), first_hit='black', tracked=True)
+    assert 'hit the black first' in event['fouls']
+
+
+def test_on_the_black_must_hit_black_first():
+    game = GameState()
+    game.apply_shot(shot(red=7), first_hit='red', tracked=True)
+    event = game.apply_shot(shot(), first_hit='red', tracked=True)
+    assert 'did not hit the black first' in event['fouls']
+    game2 = GameState()
+    game2.apply_shot(shot(red=7), first_hit='red', tracked=True)
+    event = game2.apply_shot(shot(black=True), first_hit='black', tracked=True)
+    assert game2.winner == 0
 
 
 # ---------------------------------------------------------------- board watcher

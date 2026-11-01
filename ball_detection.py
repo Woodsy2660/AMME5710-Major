@@ -204,6 +204,7 @@ def find_balls(image_hsv, cloth_mask, table_contour, table_hull, to_map, to_phot
     bites = cv2.morphologyEx(bites, cv2.MORPH_OPEN, small_kernel)
 
     balls = []
+    edge_cues = []
     for mask, at_edge in ((holes, False), (bites, True)):
         blob_count, blob_image, blob_stats, blob_centres = cv2.connectedComponentsWithStats(mask)
 
@@ -254,7 +255,8 @@ def find_balls(image_hsv, cloth_mask, table_contour, table_hull, to_map, to_phot
                 saturation = crop_pixels[:, 1].reshape(blob_crop.shape)
                 families = [('red', labels == ball_colour.RED),
                             ('yellow', (labels == ball_colour.YELLOW) & (saturation > config.EDGE_YELLOW_MIN_SATURATION)),
-                            ('darkwhite', labels == ball_colour.DARK)]
+                            ('darkwhite', labels == ball_colour.DARK),
+                            ('edgewhite', labels == ball_colour.WHITE)]
 
             for family, family_pixels in families:
                 colour_mask = (family_pixels & (blob_crop > 0)).astype(np.uint8)
@@ -263,7 +265,20 @@ def find_balls(image_hsv, cloth_mask, table_contour, table_hull, to_map, to_phot
                 for x, y, peak_height in find_centres(colour_mask, expected_radius, to_map, x0, y0):
                     # The colour is checked at the peak, before any shift, so a hidden ball is
                     # not judged on the pixels of the ball in front of it.
-                    colour = colour_at(image_hsv, x, y, 0.55 * expected_radius, family)
+                    colour = colour_at(image_hsv, x, y, 0.55 * expected_radius,
+                                       'darkwhite' if family == 'edgewhite' else family)
+                    if family == 'edgewhite':
+                        # A cue ball against a cushion: kept aside, used only if none is found on
+                        # the cloth (silver corner plates and shiny rails read as white too).
+                        if colour == 'cue' and peak_height > config.EDGE_CUE_MIN_PEAK * expected_radius:
+                            x, y = shift_sliver_inward(x, y, peak_height, expected_radius, cloth_mask)
+                            map_x, map_y = move_point(to_map, x, y)
+                            if -0.03 * config.MAP_WIDTH < map_x < 1.03 * config.MAP_WIDTH \
+                                    and -0.06 * config.MAP_HEIGHT < map_y < 1.06 * config.MAP_HEIGHT \
+                                    and not is_at_pocket_mouth(map_x, map_y):
+                                edge_cues.append(make_ball('cue', x, y, expected_radius, to_map,
+                                                           peak_height / expected_radius))
+                        continue
                     if colour is None or (at_edge and colour == 'cue'):
                         continue
                     x, y = shift_sliver_inward(x, y, peak_height, expected_radius, cloth_mask)
@@ -276,6 +291,9 @@ def find_balls(image_hsv, cloth_mask, table_contour, table_hull, to_map, to_phot
                     if colour == 'black' and is_at_pocket_mouth(map_x, map_y):
                         continue                          # a pocket opening, not the black ball
                     balls.append(make_ball(colour, x, y, expected_radius, to_map, peak_height / expected_radius))
+
+    if edge_cues and not any(ball['colour'] == 'cue' for ball in balls):
+        balls.append(max(edge_cues, key=lambda ball: ball['visible']))   # the roundest, most ball-like one
 
     # Last tidy-up across blobs: the same colour closer than 1.5 radii on the map, or any
     # colour closer than half a radius, is one ball. The first one found is kept.
