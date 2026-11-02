@@ -247,10 +247,50 @@ def open_source(args):
             return cv2.imread(paths.pop(0))
         return next_photo, 30.0, None, None
 
-    capture = cv2.VideoCapture(args.video if args.video else args.camera)
+    if args.video:
+        capture = cv2.VideoCapture(args.video)
+    else:
+        # auto = OpenCV's default (Media Foundation on Windows, which Camo needs); dshow = DirectShow.
+        backends = {'auto': cv2.CAP_ANY, 'dshow': cv2.CAP_DSHOW, 'msmf': cv2.CAP_MSMF}
+        capture = cv2.VideoCapture(args.camera, backends[args.backend])
     if not capture.isOpened():
         raise SystemExit('Could not open the camera or video')
+
+    # A live camera opens at 640x480 on Windows unless asked for more, so ask for the size the
+    # settings in config.py were tuned at (1920x1080). If the camera gives less (Camo free = 720p),
+    # frames are scaled up to that size so pixel thresholds such as TABLE_EDGE_TRIM still fit.
+    upscale_to = None
+    if not args.video:
+        capture.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
+        capture.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
+        got_w = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+        got_h = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        print(f'Camera {args.camera}: {got_w}x{got_h}')
+        same_shape = got_h > 0 and abs(got_w / got_h - args.width / args.height) < 0.01
+        if same_shape and got_h < args.height:
+            upscale_to = (args.width, args.height)
+            print(f'  scaling frames up to {args.width}x{args.height}')
+        elif not same_shape:
+            print(f'  warning: not {args.width}x{args.height} in shape; frames used as they come')
+        # A webcam's first frames are often black while it starts up (Camo for a few seconds),
+        # and the table is found from the first frame, so wait until a real picture arrives.
+        deadline = time.time() + 15
+        while True:
+            ok, frame = capture.read()
+            if ok and frame.mean() > 10:          # not black
+                time.sleep(0.5)                   # let exposure settle too
+                for _ in range(5):
+                    capture.read()
+                break
+            if time.time() > deadline:
+                raise SystemExit(f'Camera {args.camera} is only giving black frames. Check Camo Studio shows '
+                                 f'the phone picture, or try --backend dshow or another --camera number.')
+            time.sleep(0.1)
     fps = capture.get(cv2.CAP_PROP_FPS) or 30.0
+    if not args.video and not 1 <= fps <= 120:
+        # Virtual webcams on Windows can report a nonsense frame rate, which video files refuse.
+        print(f'  camera reported {fps} fps; using 30')
+        fps = 30.0
 
     last_frame = None
     calibration_frame = None
@@ -266,7 +306,11 @@ def open_source(args):
         if last_frame is not None and capture.get(cv2.CAP_PROP_POS_FRAMES) > last_frame:
             return None
         ok, frame = capture.read()
-        return frame if ok else None
+        if not ok:
+            return None
+        if upscale_to is not None:
+            frame = cv2.resize(frame, upscale_to, interpolation=cv2.INTER_LINEAR)
+        return frame
 
     # A recorded video is played at its real speed (times --speed); a live camera already is.
     play_fps = fps * args.speed if args.video else None
@@ -286,18 +330,31 @@ def unused_path(path):
 
 def open_recording(path, picture, fps):
     """
-    A video writer the size of the window picture. H.264 ('avc1') plays everywhere
-    (QuickTime, phones); 'mp4v' is the fallback if this OpenCV build lacks it.
+    A video writer the size of the window picture, and the path it actually writes to.
+    H.264 ('avc1') plays everywhere (QuickTime, phones); 'mp4v' is the fallback if this OpenCV
+    build lacks it. If neither works (seen on Windows), the video is saved as .avi (MJPG),
+    which every OpenCV build can write.
     """
     folder = os.path.dirname(path)
     if folder:
         os.makedirs(folder, exist_ok=True)
+    try:
+        with open(path, 'wb'):
+            pass                              # can this folder be written to at all?
+        os.remove(path)
+    except OSError as error:
+        raise SystemExit(f'Cannot write to {path}: {error}')
     size = (picture.shape[1], picture.shape[0])
     for codec in ('avc1', 'mp4v'):
         writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*codec), fps, size)
         if writer.isOpened():
-            return writer
-    raise SystemExit(f'Could not open {path} for writing')
+            return writer, path
+    avi_path = unused_path(os.path.splitext(path)[0] + '.avi')
+    writer = cv2.VideoWriter(avi_path, cv2.VideoWriter_fourcc(*'MJPG'), fps, size)
+    if writer.isOpened():
+        print(f'  .mp4 not available here, saving {avi_path} instead')
+        return writer, avi_path
+    raise SystemExit(f'Could not open {path} for writing ({size[0]}x{size[1]} at {fps} fps)')
 
 
 def add_foul(game, shooter):
@@ -333,6 +390,11 @@ def no_foul(game, history, result):
 def main():
     parser = argparse.ArgumentParser(description='Live pool ball tracking window')
     parser.add_argument('--camera', type=int, default=0)
+    parser.add_argument('--backend', choices=['auto', 'dshow', 'msmf'],
+                        default='auto',
+                        help='live camera: OpenCV capture backend (auto = Media Foundation on Windows)')
+    parser.add_argument('--width', type=int, default=1920, help='live camera: frame width to ask for')
+    parser.add_argument('--height', type=int, default=1080, help='live camera: frame height to ask for')
     parser.add_argument('--video')
     parser.add_argument('--photos')
     parser.add_argument('--click', nargs=2, type=int, metavar=('X', 'Y'),
@@ -376,8 +438,14 @@ def main():
     frame = next_frame()
     if frame is None:
         raise SystemExit('No frames to read')
-    watcher = BoardWatcher(calibration_frame if calibration_frame is not None else frame, args.click, fps,
-                           args.moving_camera)
+    start_frame = calibration_frame if calibration_frame is not None else frame
+    try:
+        watcher = BoardWatcher(start_frame, args.click, fps, args.moving_camera)
+    except Exception as error:
+        cv2.imwrite('first_frame.jpg', start_frame)
+        raise SystemExit(f"Could not find the table in the first frame ({type(error).__name__}: {error}).\n"
+                         f"That frame is saved as first_frame.jpg: check it shows the whole, clear table.\n"
+                         f"If it does, try --click X Y with a pixel on bare cloth.")
 
     corrections = sorted((float(c.split(':')[0]), c.split(':')[1]) for c in args.correct)
     frame_number = int(args.start * fps) if args.video else 0
@@ -415,7 +483,7 @@ def main():
                     frame_number = frame_number + 1
                     if args.save_raw:
                         if raw_writer is None:
-                            raw_writer = open_recording(args.save_raw, frame, fps)
+                            raw_writer, args.save_raw = open_recording(args.save_raw, frame, fps)
                         raw_writer.write(frame)
             first = False
 
@@ -476,7 +544,7 @@ def main():
             message = ''
         if args.record and (not paused or writer is None):
             if writer is None:
-                writer = open_recording(args.record, picture, fps)
+                writer, args.record = open_recording(args.record, picture, fps)
             writer.write(picture)
         if args.headless:
             if finished:
