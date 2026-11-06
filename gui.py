@@ -41,6 +41,8 @@ import draw
 import top_down
 from board_watcher import BoardWatcher
 from game_state import GameState
+from game_state import GameState
+from shot_log import ShotLog          # NEW
 
 # Layout, in pixels: video and table side by side at the same height, the scoreboard below.
 ROW_HEIGHT = 600
@@ -330,6 +332,10 @@ def no_foul(game, history, result):
 
 # ---------------------------------------------------------------- main loop
 
+# Referee keys, written to the shot log so corrected shots can be told apart from the system's own calls.
+KEY_ACTIONS = {ord('u'): 'undo', ord('s'): 'swap', ord('c'): 'colours', ord('x'): 'foul',
+               ord('f'): 'nofoul', ord('n'): 'new game', ord('k'): 'find table'}
+
 def main():
     parser = argparse.ArgumentParser(description='Live pool ball tracking window')
     parser.add_argument('--camera', type=int, default=0)
@@ -361,6 +367,9 @@ def main():
     parser.add_argument('--record', metavar='PATH', help='also save the window as a video (.mp4)')
     parser.add_argument('--headless', action='store_true',
                         help='no window (use with --record): process the whole video and stop')
+    parser.add_argument('--log', metavar='FOLDER',
+                    help='save every shot the system scores (and frame times) as CSV in this folder, '
+                            'e.g. --log logs')
     args = parser.parse_args()
     # Never overwrite an earlier recording: a name already used gets _2, _3 ... added.
     if args.record:
@@ -398,6 +407,18 @@ def main():
     live_start = time.time()
     writer = None
     raw_writer = None
+
+    shot_log = None
+    if args.log:
+        if args.video:
+            source_name = os.path.splitext(os.path.basename(args.video))[0]
+        else:
+            source_name = time.strftime('live_%Y%m%d_%H%M%S')
+        shot_log = ShotLog(args.log, source_name)
+
+    def clip_time():
+        """Seconds into the video (recording) or since the start (live camera)."""
+        return frame_number / fps if args.video else time.time() - live_start
 
     if not args.headless:
         cv2.namedWindow('Pool tracking', cv2.WINDOW_NORMAL)
@@ -438,6 +459,8 @@ def main():
                     history.pop()
                     game = no_foul(game, history, last_result)
                 message = f"correction: {action}"
+                if shot_log:                                                     
+                    shot_log.correction(action, game, frame_number, clip_time())  
 
             if not finished:
                 try:
@@ -454,7 +477,10 @@ def main():
                     else:
                         # Live camera: real clock time (frames are dropped if processing falls behind).
                         live_t = None if (args.video or photo_mode) else time.time() - live_start
+                        started = time.perf_counter()                                    # NEW
                         result = watcher.update(frame, live_t)
+                        if shot_log:                                                     # NEW
+                            shot_log.frame(frame_number, time.perf_counter() - started)  # NEW
                 except Exception as error:            # e.g. the table cannot be found
                     message = f"error: {error}"[:60]
                     result = None
@@ -467,8 +493,10 @@ def main():
                     history.append(copy.deepcopy(game))
                     last_result = result
                     last_shooter = game.current
-                    game.apply_shot(result['potted'], result['note'], result['first_hit'],
-                                    result['tracked'], result['balls_moved'])
+                    event = game.apply_shot(result['potted'], result['note'], result['first_hit'],
+                                            result['tracked'], result['balls_moved'])
+                    if shot_log:
+                        shot_log.shot(game, event, result, last_shooter, frame_number, clip_time())
 
         picture = render(frame, watcher, game)
         if message and not args.headless:
@@ -524,7 +552,12 @@ def main():
             history = []
             joined = False                    # take the ball counts from the next board reading
             message = 'new game'
+    
+        if shot_log and key in KEY_ACTIONS:                                   # NEW
+                shot_log.correction(KEY_ACTIONS[key], game, frame_number, clip_time())  # NEW
 
+    if shot_log:
+        print(f"Shot log saved to {shot_log.close()}")
     if raw_writer is not None:
         raw_writer.release()
         print(f"Camera feed saved to {args.save_raw}")
