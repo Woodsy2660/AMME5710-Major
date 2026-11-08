@@ -4,7 +4,9 @@ Step 7: keep score. Applies the rules of blackball pool to what was potted on ea
 - Two players, 7 reds, 7 yellows, 1 black, 1 cue ball
 - Table is open until a player pots only one colour; that colour becomes theirs
 - Potting one of your own balls (or any ball on an open table) keeps your turn
-- Fouls: potting the cue ball, potting the opponent's colour
+- Fouls: potting the cue ball, potting the opponent's colour, hitting no ball, hitting the
+  opponent's colour first, hitting the black first (or not hitting it first when on the black).
+  The contact fouls are only called on shots the tracker followed, never on a guess
 - After a foul the other player gets two visits (config.FOUL_GIVES_TWO_VISITS)
 - Black: potting it after clearing your colour wins, potting it any other way loses
 

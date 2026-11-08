@@ -1,7 +1,7 @@
 """
 Step 7a: turn a video into shots for the scoring rules (game_state.py).
 
-Uses run_video.py's tests to get trusted board states:
+Uses board_reading.py's tests to get trusted board states:
 - is the table still (moving pixels), is the view clear (no arm or cue over the table)
 - two readings half a second apart must agree before a state is kept
 
@@ -95,7 +95,7 @@ def one_of_each(balls, previous):
 
 class BoardWatcher:
 
-    def __init__(self, first_frame=None, click=None, fps = 30.0, moving_camera=False):
+    def __init__(self, first_frame=None, click=None, fps=30.0, moving_camera=False):
         """
         The table is found from the first frame (camera on a tripod, table clear).
         moving_camera: the camera may be moved or bumped during the game, so the table is
@@ -135,17 +135,13 @@ class BoardWatcher:
         self.blocked_filter = obstruction.new_blocked_filter()
         self.lump_mask = None  # Stored for per-ball hidden detection during shots
 
-    # def read(self, frame):
-    #     """The ball list for one frame."""
-    #     return run_video.read_board(frame, self.reference, self.click_x, self.click_y)
-
     def update(self, frame, t=None):
         """
-        Call once per video frame. Follows run_video.main(), steps 1-4.
+        Call once per video frame.
         t : the frame's time in seconds. Leave out for a recording (worked out from the frame
             number); give the real clock time for a live camera, which drops frames when the
             processing falls behind, so frame numbers no longer match time.
-        Output: None, or a dict {'potted', 'note'} when a shot has just finished.
+        Output: None, or the dict from commit() when a shot has just finished.
         """
 
         if t is None:
@@ -179,12 +175,10 @@ class BoardWatcher:
         was_shot = self.detector['state'] == 'SHOT'
         readable = update_detector(self.detector, moving, False, self.reference)
         is_shot = self.detector['state'] == 'SHOT'
-        
-        
-       
+
         # Tracking balls during a shot
         if is_shot:
-            self.shot_since_commit = True #remember if pixel movement if due to an actual shot or other occlusion eg arm
+            self.shot_since_commit = True    # so commit() knows the motion was a shot, not just an arm
 
             # shot has just started - give every ball from the last committed state a track
             if not was_shot and self.committed_balls is not None:
@@ -214,7 +208,7 @@ class BoardWatcher:
                 # follow every ball frame by frame
                 _, events = track_frame(self.tracks, frame, t, 1.0/self.fps, self.reference)
                 for event in events:
-                    #TO DO coast() reports e.g. 'red3 potted in the top-left pocket'.
+                    # coast() reports e.g. 'red3 potted in the top-left pocket'.
                     # Only the colour and pocket are kept: which red it was does not matter
                     # for scoring. 'lost' events (dropped away from a pocket) are ignored;
                     # the board counts in commit() decide what really went down.
@@ -254,7 +248,7 @@ class BoardWatcher:
                         self.last_tracks = None       # the kept board takes over from here
                     self.previous_reading = reading
 
-        # TO DO - why are these displayed? is this helpful?
+        # Status text shown by the GUI
         if self.camera_was_moved:
             self.status = 'camera moved'
         elif self.status_note:
@@ -365,9 +359,9 @@ class BoardWatcher:
             if track['lost']:
                 continue
             # A ball that was moving (or was knocked) and has been missing for a while with nothing
-            # over it: most likely potted (a ball that rolled in
-            # unseen, or vanished just short of a pocket). It is not drawn; if it is in fact still
-            # on the table it comes back with the next board reading.
+            # over it: most likely potted (a ball that rolled in unseen, or vanished just short
+            # of a pocket). It is not drawn; if it is in fact still on the table it comes back
+            # with the next board reading.
             if track['free'] and track['missed'] > hide_after and not track.get('hidden', False):
                 continue
             photo_x, photo_y = top_down.move_point(to_photo, track['seen_x'], track['seen_y'])
@@ -384,7 +378,11 @@ class BoardWatcher:
         Inputs
         - balls : the agreed ball list
         - shot_happened : force True for still photos (no motion to measure)
-        Output: None, or {'potted', 'note'} if this state ends a shot
+        Output: None, or if this state ends a shot a dict with
+        - potted, note : as from shot_result()
+        - tracked : True if the tracker followed the cue ball, so first_hit can be trusted
+        - first_hit : colour of the first ball the cue ball hit, or None
+        - balls_moved : True if any ball other than the cue ball moved or went down
         """
         if shot_happened is not None:
             self.shot_since_commit = shot_happened
@@ -449,7 +447,6 @@ class BoardWatcher:
 
         # What the cue ball hit first, from the tracker (for the 'no ball hit' / 'wrong ball
         # first' fouls). Unknown (None for both) if the shot was not tracked.
-        tracks = self.tracks if self.tracks is not None else self.last_tracks
         tracked = tracks is not None and 'cue' in tracks and tracks['cue']['free']
         # Did any ball other than the cue ball move or go down? Checked on the two kept boards,
         # so a contact the tracker missed cannot turn into a 'no ball hit' foul.
