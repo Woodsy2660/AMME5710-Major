@@ -34,11 +34,29 @@ AMME5710-Major/
 ├── requirements.txt
 ├── eval/                  evaluation scripts and hand-made ground truth (see Evaluation)
 ├── results/eval/          evaluation results (tables, CSVs, figures)
-└── Videos/
+└── Videos/              not included: download from Google Drive (see Videos)
     ├── Game videos at normal diagonal view/   main test videos (tripod at a table corner)
     ├── Game videos at other view angles/      other camera positions
     └── GUI recordings/                        screen recordings of the game window
 ```
+
+---
+
+## Videos
+
+The videos are too large to include. Download them from Google Drive:
+
+**https://drive.google.com/drive/folders/1PdaQXUE6kI3Szcc3Ps4YSRILCWtXDSFV?usp=drive_link**
+
+Put the three folders from the Drive inside a `Videos/` folder at the repo root, so the paths are:
+
+```
+Videos/Game videos at normal diagonal view/
+Videos/Game videos at other view angles/
+Videos/GUI recordings/
+```
+
+The game window, `diagnose.py`, `extract_frames.py` and some evaluation scripts need them (see Evaluation). The scoring tests, `ball_eval.py`, `brightness_sweep.py` and all the results in `results/eval/` do not.
 
 ---
 
@@ -212,7 +230,7 @@ python eval/clip_info.py                              # duration, fps, frames of
 python eval/timing.py "Videos/Game videos at normal diagonal view/test_4.mp4"
 python eval/threshold_sweep.py "Videos/Game videos at normal diagonal view/test_4.mp4" --shots eval/shots_test_4.csv
 ```
-`calibration_eval.py`, `clip_info.py`, `timing.py` and `threshold_sweep.py` need the videos in `Videos/`. `ball_eval.py` and `brightness_sweep.py` only need `eval/frames/` and `eval/gt/`.
+`calibration_eval.py`, `clip_info.py`, `timing.py` and `threshold_sweep.py` need the videos in `Videos/` ([download from Google Drive](https://drive.google.com/drive/folders/1PdaQXUE6kI3Szcc3Ps4YSRILCWtXDSFV?usp=drive_link)). `ball_eval.py` and `brightness_sweep.py` only need `eval/frames/` and `eval/gt/`.
 
 ---
 
