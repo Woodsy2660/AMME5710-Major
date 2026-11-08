@@ -133,5 +133,5 @@ def diagnose_video(video_path, output_dir="diagnostics", save_every=30, max_fram
 
 if __name__ == "__main__":
     import sys
-    video = sys.argv[1] if len(sys.argv) > 1 else "videos/IMG_0711.mp4"
+    video = sys.argv[1] if len(sys.argv) > 1 else "Videos/Game videos at other view angles/IMG_0711.MOV"
     diagnose_video(video)

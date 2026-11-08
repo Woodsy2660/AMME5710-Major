@@ -49,7 +49,7 @@ def extract_frames(video_path, output_dir="frames", frame_indices=None, interval
     return saved
 
 if __name__ == "__main__":
-    video = sys.argv[1] if len(sys.argv) > 1 else "videos/IMG_0711.mp4"
+    video = sys.argv[1] if len(sys.argv) > 1 else "Videos/Game videos at other view angles/IMG_0711.MOV"
 
     # One frame every 60 frames (2 s at 30 fps), from the first 900 frames
     extract_frames(video, output_dir="frames", interval=60)

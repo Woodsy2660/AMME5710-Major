@@ -1,0 +1,44 @@
+{
+  "video": "Videos/Game videos at other view angles/ScreenRecording_10-17-2026 21-30-39_1.mp4",
+  "frame": 55,
+  "width": 2868,
+  "height": 1320,
+  "corners": [
+    [
+      2258.5,
+      883.7
+    ],
+    [
+      700.9,
+      996.6
+    ],
+    [
+      1000.2,
+      760.0
+    ],
+    [
+      1882.1,
+      709.8
+    ]
+  ],
+  "clicks": [
+    [
+      2258.5,
+      883.7
+    ],
+    [
+      700.9,
+      996.6
+    ],
+    [
+      1000.2,
+      760.0
+    ],
+    [
+      1882.1,
+      709.8
+    ]
+  ],
+  "corner_order": "pipeline: clockwise on screen, corner 0 -> 1 is a long side",
+  "corner_definition": "playing area: cushion-nose lines extended across the pocket, at cloth level"
+}

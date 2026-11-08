@@ -1,0 +1,38 @@
+[
+ {
+  "x": 763.2,
+  "y": 564.0,
+  "colour": "red",
+  "hidden": false
+ },
+ {
+  "x": 1022.4,
+  "y": 472.8,
+  "colour": "red",
+  "hidden": false
+ },
+ {
+  "x": 1156.8,
+  "y": 637.2,
+  "colour": "red",
+  "hidden": false
+ },
+ {
+  "x": 1314.0,
+  "y": 418.8,
+  "colour": "red",
+  "hidden": false
+ },
+ {
+  "x": 1291.2,
+  "y": 424.8,
+  "colour": "cue",
+  "hidden": false
+ },
+ {
+  "x": 1534.8,
+  "y": 426.0,
+  "colour": "black",
+  "hidden": false
+ }
+]

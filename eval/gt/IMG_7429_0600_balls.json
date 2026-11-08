@@ -1,0 +1,44 @@
+[
+ {
+  "x": 855.6,
+  "y": 523.2,
+  "colour": "red",
+  "hidden": false
+ },
+ {
+  "x": 873.6,
+  "y": 261.6,
+  "colour": "red",
+  "hidden": false
+ },
+ {
+  "x": 1466.4,
+  "y": 210.0,
+  "colour": "red",
+  "hidden": false
+ },
+ {
+  "x": 1327.2,
+  "y": 224.4,
+  "colour": "yellow",
+  "hidden": false
+ },
+ {
+  "x": 1177.2,
+  "y": 584.4,
+  "colour": "yellow",
+  "hidden": false
+ },
+ {
+  "x": 818.4,
+  "y": 399.6,
+  "colour": "cue",
+  "hidden": false
+ },
+ {
+  "x": 460.8,
+  "y": 481.2,
+  "colour": "black",
+  "hidden": false
+ }
+]

@@ -1,0 +1,20 @@
+[
+ {
+  "x": 1536.0,
+  "y": 577.2,
+  "colour": "red",
+  "hidden": false
+ },
+ {
+  "x": 549.6,
+  "y": 433.2,
+  "colour": "red",
+  "hidden": false
+ },
+ {
+  "x": 372.0,
+  "y": 386.4,
+  "colour": "cue",
+  "hidden": false
+ }
+]

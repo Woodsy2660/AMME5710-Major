@@ -1,0 +1,45 @@
+{
+  "video": "Videos/Game videos at other view angles/Full_game_noBreak.MOV.mp4",
+  "frame": 30,
+  "width": 1920,
+  "height": 1080,
+  "corners": [
+    [
+      1428.0,
+      801.6
+    ],
+    [
+      277.2,
+      387.6
+    ],
+    [
+      726.0,
+      266.4
+    ],
+    [
+      1726.8,
+      463.2
+    ]
+  ],
+  "clicks": [
+    [
+      277.2,
+      387.6
+    ],
+    [
+      726.0,
+      266.4
+    ],
+    [
+      1726.8,
+      463.2
+    ],
+    [
+      1428.0,
+      801.6
+    ]
+  ],
+  "corner_order": "pipeline: clockwise on screen, corner 0 -> 1 is a long side",
+  "corner_definition": "playing area: cushion-nose lines extended across the pocket, at cloth level",
+  "order_corrected": "corners rotated by one place after clicking: the first two clicks were a short side (reprojection 1201 px as clicked, 6.8 px rotated). Click positions unchanged."
+}

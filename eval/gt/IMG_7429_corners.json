@@ -1,0 +1,44 @@
+{
+  "video": "Videos/Game videos at normal diagonal view/IMG_7429.MOV",
+  "frame": 30,
+  "width": 1920,
+  "height": 1080,
+  "corners": [
+    [
+      206.4,
+      514.8
+    ],
+    [
+      1122.0,
+      146.4
+    ],
+    [
+      1646.4,
+      223.2
+    ],
+    [
+      968.4,
+      861.6
+    ]
+  ],
+  "clicks": [
+    [
+      206.4,
+      514.8
+    ],
+    [
+      1122.0,
+      146.4
+    ],
+    [
+      1646.4,
+      223.2
+    ],
+    [
+      968.4,
+      861.6
+    ]
+  ],
+  "corner_order": "pipeline: clockwise on screen, corner 0 -> 1 is a long side",
+  "corner_definition": "playing area: cushion-nose lines extended across the pocket, at cloth level"
+}

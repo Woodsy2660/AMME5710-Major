@@ -1,0 +1,9 @@
+file,label,view,height_m,distance_m,lighting,session,start_s,notes
+Videos/Game videos at normal diagonal view/IMG_0754.MOV,IMG_0754,corner,1.02,1.74,,diagonal,,tripod lens 1.80 m above floor - 0.78 m cloth height (assumed standard); 0.30-0.50 m diagonally beyond the outer corner + 1.34 m half external diagonal
+Videos/Game videos at normal diagonal view/IMG_7429.MOV,IMG_7429,corner,1.02,1.74,,diagonal,,as IMG_0754
+Videos/Game videos at normal diagonal view/test_3.mp4,test_3,corner,1.02,1.74,,diagonal,,as IMG_0754
+Videos/Game videos at normal diagonal view/test_4.mp4,test_4,corner,1.02,1.74,,diagonal,,as IMG_0754
+Videos/Game videos at other view angles/Full_game_noBreak.MOV.mp4,Full_game_noBreak,corner,,,,other,,camera position not measured: elevation from ground-truth corners only
+Videos/Game videos at other view angles/IMG_0711.MOV,IMG_0711,corner,,,,other,,camera position not measured; IMG_0711.MOV.mp4 is a 30 fps copy of this video and is left out
+Videos/Game videos at other view angles/IMG_0712.MOV,IMG_0712,corner,,,,other,40,camera position not measured; camera being moved 10-34 s (phase correlation) so sampling starts at 40 s
+Videos/Game videos at other view angles/ScreenRecording_10-17-2026 21-30-39_1.mp4,ScreenRecording,side,,,,other,,camera position not measured; a screen recording (2868x1320 with black side bars)
