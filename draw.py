@@ -1,5 +1,5 @@
 """
-Step 6: pictures of the result. Nothing here affects detection. Built to be modula r
+Pictures of the result. Nothing here affects detection. Built to be modula r
 """
 
 import cv2

@@ -1,6 +1,6 @@
 """
-Extract frames from video for Claude to analyze.
-Saves frames as images that can be read and viewed.
+Saves frames from a video as JPEG images, for picking test frames and checking detection by eye.
+How to run: python extract_frames.py "path/to/video.mp4"
 """
 import cv2
 import os
@@ -51,6 +51,5 @@ def extract_frames(video_path, output_dir="frames", frame_indices=None, interval
 if __name__ == "__main__":
     video = sys.argv[1] if len(sys.argv) > 1 else "videos/IMG_0711.mp4"
 
-    # Extract frames at: start, 2s, 5s, 10s, 20s, 30s, 60s
-    # Adjust based on your video length
+    # One frame every 60 frames (2 s at 30 fps), from the first 900 frames
     extract_frames(video, output_dir="frames", interval=60)

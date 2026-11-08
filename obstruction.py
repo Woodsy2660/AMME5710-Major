@@ -1,27 +1,22 @@
 """
-Obstruction detection module for pool table video analysis.
+Obstruction detection: arms, hands, cues and bodies over the table.
 
-Replaces scattered functions (view_is_blocked, covers_balls, camera_moved) with a unified
-approach that measures non-cloth lumps by their shape in ball units.
+Each lump of non-cloth pixels inside the table is measured by its shape in ball units (thickness,
+thin part, contact with the table edge, area), using the ball size expected at that spot. Ball-shaped
+lumps (single balls, clusters, a blurred moving ball) are ignored; anything else is an obstruction.
 
-See INTEGRATION.md for the full specification of what each function should do.
+Used by board_watcher.py:
+- view_is_blocked / update_blocked : no board reading while something is over the table
+- occluder_mask / hidden_balls : during a shot, a ball under an obstruction keeps coasting
+  instead of being called potted
 
-Config parameters used (add to config.py):
-- THICK_RADII: thickness threshold for obstruction detection
-- THIN_MIN_BALLS: thin part area threshold
-- EDGE_CONTACT_RADII: edge contact length threshold
-- EDGE_MIN_BALLS: edge contact area threshold
-- HUGE_BALLS: area threshold for huge obstructions
-- HIDDEN_DILATE_PX: dilation for occluder mask
-- CLEAR_FRAMES: frames required for blocked->clear transition
-- CAMERA_SHIFT_PX: pixel shift threshold for camera movement
-- CAMERA_SHIFT_FRAMES: frame count for camera movement detection
+Thresholds are in config.py (THICK_RADII, THIN_RADII, THIN_MIN_BALLS, EDGE_CONTACT_RADII,
+EDGE_MIN_BALLS, EDGE_RING_WIDTH, HUGE_BALLS, HIDDEN_DILATE_PX, CLEAR_FRAMES, SHADOW_MIN_SATURATION).
 """
 
 import cv2
 import numpy as np
 import config
-import table_mask
 import top_down
 
 
@@ -149,7 +144,7 @@ def unexplained_lumps(frame_bgr, reference):
 
 def occluder_mask(lump_mask):
     """
-    Grows the obstruction lumps a little, thus ball whose edge is under an arm counts as hidden. 
+    Grows the obstruction lumps a little, so a ball whose edge is under an arm counts as hidden. 
     """
     kernel = np.ones((config.HIDDEN_DILATE_PX * 2 + 1,) * 2, np.uint8)
     return cv2.dilate(lump_mask, kernel)
@@ -210,30 +205,3 @@ def hidden_balls(balls, occluder, reference):
         inside = 0 <= x < width and 0 <= y < height
         result.append(bool(inside and occluder[y, x] > 0))
     return result
-# -----------------------------------------------------------------------------
-# Camera movement detection
-# -----------------------------------------------------------------------------
-
-def new_camera_filter():
-    return {'moved': False, 'moved_count': 0, 'shift': 0.0}
-
-
-def camera_moved(gray_small, reference, filter_state):
-    """
-    Phase correlation between the current small grey frame and the REFERENCE frame (the first
-    frame, stored as reference['first_gray_small']). Compared with the first frame, not the previous
-    one, so a slow drift is caught as well as a bump. A person walking through can fake a shift
-    for a frame or two, so the answer only flips after CAMERA_SHIFT_FRAMES frames in a row.
-    Returns True while the camera is considered moved (the table must be re-found).
-    """
-    (shift_x, shift_y), _ = cv2.phaseCorrelate(np.float32(reference['first_gray_small']), np.float32(gray_small))
-    shift = float(np.hypot(shift_x, shift_y))
-    filter_state['shift'] = shift
-    if shift > config.CAMERA_SHIFT_PX:
-        filter_state['moved_count'] = filter_state['moved_count'] + 1
-        if filter_state['moved_count'] >= config.CAMERA_SHIFT_FRAMES:
-            filter_state['moved'] = True
-    else:
-        filter_state['moved_count'] = 0
-        filter_state['moved'] = False
-    return filter_state['moved']

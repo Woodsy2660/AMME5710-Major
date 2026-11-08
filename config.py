@@ -37,9 +37,9 @@ SHADOW_BLACK_RADII = 1.2          # a 'black' closer than this many radii to a r
 MAX_EDGE_BLOB_AREA_RATIO = 6.0    # a bite out of the cloth outline bigger than this is a pocket or rail, not balls
 
 # Finding ball centres inside a blob (ball_detection.py)
-MIN_COLOUR_FRACTION = 0.5         # CHANGED (was 0.35). A real ball has 0.85+ of its colour in the disc; the dark pocket between
+MIN_COLOUR_FRACTION = 0.5         #  A real ball has 0.85+ of its colour in the disc; the dark pocket between
                                   # three touching balls has under 0.5, so this stops it becoming a black ball
-PEAK_MIN_RATIO = 0.30             # CHANGED (was 0.20). This camera is high (26 deg at the centre, 58 deg near): a ball hidden
+PEAK_MIN_RATIO = 0.30             # This camera is high (26 deg at the centre, 58 deg near): a ball hidden
                                   # behind another still shows 0.9 r, so 0.3 is safe and drops the thin shadow slivers (0.2-0.3 r)
 WEAK_PEAK_RATIO = 0.70            # thinner than this = a "sliver": a ball mostly hidden behind another
 SAME_BALL_ON_MAP = 1.5            # two centres closer than this many radii ON THE MAP are one ball
@@ -54,19 +54,16 @@ BLACK_MIN_COLOURLESS_SHARE = 0.15 # a dark patch is the black ball only if at le
 # Corner orientation override (None = auto-detect)
 FIRST_SIDE_IS_LONG = None
 
-# Video: when can the board be read?  (run_video.py)
+# Video: when can the board be read?  (shot_detection.py, board_watcher.py)
 # The four "fraction" numbers are fractions of the table area in the picture, so they do not
 # depend on the video size.
 SIGNAL_SCALE = 0.5                # frames are shrunk by this before measuring motion (speed)
 MOVING_PIXEL_DIFF = 25            # grey-level change between two frames that counts as "moving"
 MOVE_HIGH_FRACTION = 0.002        # moving pixels above this: a shot is in progress
-MOVE_LOW_FRACTION = 0.0005        # CHANGED (was 1e-5 = 1 px). Measured on Video 4: a still table gives 0 px at the median but
-                                  # up to 71 px at the 99th percentile (sensor noise). 0.0005 = 68 px here; a shot gives 375+
+MOVE_LOW_FRACTION = 0.0005        # moving pixels below this: the shot is over, and the board can be read
 HOLD_FRAMES = 15                  # still for this many frames in a row before the table counts as settled
-TABLE_EDGE_TRIM = 15             # CHANGED (was 41). px (at SIGNAL_SCALE) trimmed off the table edge for the motion / blocked tests.
-                                  # Video 4 is clear at 15 (checked on four clear frames); the only non-cloth near the edge is the
-                                  # pocket mouths, which obstruction.py drops as ball-sized. Keep 41 only for IMG_0711.
-# OCCLUDER_BIG_FRACTION / OCCLUDER_EDGE_FRACTION: no longer used once obstruction.py is in (delete when the old view_is_blocked goes)
+TABLE_EDGE_TRIM = 15              # pixels to trim off the table outline when measuring moving pixels, so the cushions do not count
+
 OCCLUDER_BIG_FRACTION = 0.024
 OCCLUDER_EDGE_FRACTION = 0.012
 READ_EVERY = 15                   # frames between two readings of the board (0.5 s at 30 fps)
@@ -78,7 +75,7 @@ AGREE_TOLERANCE = 1.0             # two readings agree if every ball is within t
 WINDOW_BASE_RADII = 3.0     # search window half-size for a found ball, in ball radii
 WINDOW_SPEED_FACTOR = 1.5   # extra half-size per map px the ball is expected to move this frame
 WINDOW_MAX_RADII = 15.0     # the window doubles every frame a ball is unseen, up to this size
-VELOCITY_BLEND = 0.6        # weight of a new velocity measurement (the rest is the old velocity): TO DO - remove this? set to 1?
+VELOCITY_BLEND = 0.6        # weight of a new velocity measurement (the rest is the old velocity)
 MAX_COAST_FRAMES = 8        # a moving ball unseen for more frames than this is dropped
 DROP_MIN_SPEED = 20.0       # map px/s; slower than this counts as still, and is never dropped
 POCKET_ZONE_RADII = 4.0     # dropped within this many radii of a pocket centre = potted there
@@ -96,7 +93,7 @@ POCKET_GONE_FRAMES = 15     # tracking: a ball gone this many frames at a pocket
 POCKET_LOOKAHEAD = 0.4     # tracking: s; a ball that vanishes heading into a pocket within this time is potted
 DISPLAY_GONE_SECONDS = 0.5 # GUI: a tracked ball missing this long, with nothing over it, is no longer drawn (it has most likely gone down)
 CUE_MAX_SATURATION = 55     # tracking: cue-ball pixels are whiter than this (HSV saturation); skin is about 65-90
-TRACK_PAUSE_OCCLUDER_FRACTION = 0.10  # no longer used once obstruction.hidden_balls is in (per-ball hidden flags replace the pause)
+TRACK_PAUSE_OCCLUDER_FRACTION = 0.10    # tracking pauses while a lump bigger than this (of the table) covers 2+ balls (board_watcher.covers_balls)
 
 POCKETS = {'top-left': (0, 0), 'top-middle': (MAP_WIDTH / 2, 0), 'top-right': (MAP_WIDTH, 0),
            'bottom-left': (0, MAP_HEIGHT), 'bottom-middle': (MAP_WIDTH / 2, MAP_HEIGHT),
@@ -110,17 +107,14 @@ BALLS_PER_COLOUR = 7              # blackball pool: 7 red, 7 yellow, 1 black, 1 
 FOUL_GIVES_TWO_VISITS = True      # after a foul the other player gets two visits (pub rules)
 
 # -----------------------------------------------------------------------------
-# Obstruction detection (obstruction.py)
-# -----------------------------------------------------------------------------
+# Obstruction detection 
 # Lump classification thresholds (in ball radii / ball areas)
 THICK_RADII = 1.5                 # thickness > this = arm/hand/body
 THIN_RADII = 0.6                  # opening kernel radius for thin part detection
 THIN_MIN_BALLS = 1.0              # thin part area > this = cue/fingers
 EDGE_CONTACT_RADII = 4.0          # edge contact length > this = hand reaching in
 EDGE_MIN_BALLS = 3.0              # edge contact area > this many ball areas
-EDGE_RING_WIDTH = 7               # px width of edge detection ring at SIGNAL_SCALE. CHECK: must equal the real width of
-                                  # reference['edge_small'] = count_nonzero(edge_small) / hull perimeter. Built with a 7x7
-                                  # erosion the ring is about 3.5 px wide, and 7 here halves every edge-contact measurement.
+EDGE_RING_WIDTH = 7               # px width of edge detection ring at SIGNAL_SCALE
 HUGE_BALLS = 15.0                 # area > this = huge obstruction
 HIDDEN_DILATE_PX = 10             # dilate lump mask by this many px for hidden ball check
 CLEAR_FRAMES = 5                  # blocked->clear requires this many clear frames

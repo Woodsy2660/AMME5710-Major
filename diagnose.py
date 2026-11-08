@@ -5,7 +5,6 @@ Saves every Nth frame with state info overlaid.
 
 import cv2
 import os
-import numpy as np
 import table_mask
 import board_reading
 import config
@@ -126,7 +125,7 @@ def diagnose_video(video_path, output_dir="diagnostics", save_every=30, max_fram
 
     cap.release()
 
-    print(f"\n=== SUMMARY ===")
+    print("\n=== SUMMARY ===")
     print(f"Frames processed: {frame_idx}")
     print(f"Frames saved: {saved}")
     print(f"State counts: {stats}")

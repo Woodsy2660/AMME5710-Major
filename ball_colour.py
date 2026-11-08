@@ -1,10 +1,8 @@
 """
-Step 5: decidee what colour a ball is: cue, black, red, yellow. 
+  Label pixels by colour: white, dark, red, yellow, or other.
 
-- Label every pixel as white, dark, red, yellow, or other.
-- White dominance -> cue ball. black dominance -> black ball 
-- otherwise average the hue of the coloured pixels and pick nearest of red or yellow. 
-
+  ball_detection.py and tracking_helpers.py build one mask per colour family from these labels,
+  and ball_detection.colour_at decides each ball's colour from the labels in a disc round its centre.
 """
 
 import numpy as np
@@ -17,11 +15,9 @@ DARK = 2
 RED = 3
 YELLOW = 4 
 
-LABEL_NAMES = {WHITE: 'cue', DARK: 'black', RED: 'red', YELLOW: 'yellow'}
-
 def hue_distance(hue, reference):
     """
-    Distnace between two hues, going the shorrt way round the 0-180 circle
+    Distance between two hues, going the short way round the 0-180 circle
     """
     difference = np.abs(np.asarray(hue, dtype=float) - reference) % 180
     return np.minimum(difference, 180 - difference)
@@ -50,28 +46,3 @@ def label_pixels(hsv_pixels):
     is_white = (saturation < config.WHITE_MAX_SATURATION) & (value > config.WHITE_MIN_VALUE)
     labels[is_white] = WHITE
     return labels
-
-def classify_ball(hsv_pixels):
-    """
-    Input
-    - hsv_pixels : stated above
-    Output 
-    - colour : one of WHITE, DARK, RED, YELLOW
-    """
-    labels = label_pixels(hsv_pixels)
-    counts = np.bincount(labels, minlength=5)
-
-    if counts[WHITE] > config.WHITE_FRACTION_FOR_CUE * len(hsv_pixels):
-        return 'cue'
-    if counts[DARK] > config.DARK_FRACTION_FOR_BLACK * len(hsv_pixels):
-        return 'black'
-
-    # Otherwise it's a coloured ball. Average the hue of the coloured pixels and pick nearest.
-    coloured_hues = hsv_pixels[(labels == RED) | (labels == YELLOW), 0]
-    if len(coloured_hues) == 0:
-        return 'unknown'
-    average_hue = np.mean(coloured_hues)
-    if hue_distance(average_hue, config.RED_HUE) < hue_distance(average_hue, config.YELLOW_HUE):
-        return 'red'
-    else:
-        return 'yellow'

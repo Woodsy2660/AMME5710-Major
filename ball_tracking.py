@@ -1,8 +1,14 @@
+"""
+Ball tracking during a shot: every ball from the last kept board state gets an ID and is
+followed frame by frame in a small search window on the map, so the system knows which balls
+moved, what the cue ball hit first, and which pocket each potted ball went into.
+"""
+
 import cv2
 import numpy as np
 import config
 from config import VELOCITY_BLEND, MAX_COAST_FRAMES, DROP_MIN_SPEED, POCKET_ZONE_RADII, NO_MATCH, POCKETS
-from tracking_helpers import *
+from tracking_helpers import FAMILY, window_half_size, photo_window, find_candidates, merge_close
 from scipy.optimize import linear_sum_assignment
 
 def initialise_tracking(frame, t):
@@ -39,7 +45,6 @@ def see(track, position, t):
         track['vx'] = VELOCITY_BLEND * (x - track['seen_x']) / dt + (1 - VELOCITY_BLEND) * track['vx']
         track['vy'] = VELOCITY_BLEND * (y - track['seen_y']) / dt + (1 - VELOCITY_BLEND) * track['vy']
 
-    track['max_speed'] = max(track.get('max_speed', 0.0), float(np.hypot(track['vx'], track['vy'])))
     track.update(x=x, y=y, seen_x=x, seen_y=y, seen_t=t, missed=0, vanish=None)
     track['path'].append((x, y, True))
 

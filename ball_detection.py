@@ -1,5 +1,5 @@
 """
-step 4: find the balls on the table (blob detector). 
+Find the balls on the table (blob detector). 
 
 - size tests. top-down map tells us how big a ball should look at each spot, thus blobs that are too small or thin are dropped. 
 - balls resting against a cushion. they overlap the edge of the cloth, showing up as bites out of the outline instead of holes 
@@ -25,8 +25,6 @@ fix for cue and black balls on a cushion, and needs a fixed camera.
 
 import cv2
 import numpy as np
-from sklearn.cluster import KMeans
-
 import config
 import ball_colour
 from top_down import move_point, ball_radius_in_photo

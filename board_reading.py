@@ -1,17 +1,15 @@
 """
-Run ball detection and the game-state tracker on an mp4 video.
+Reading the board from video frames (used by board_watcher.py).
 
-How to run: python run_video.py "path/to/video.mp4"
-
-Output:<name>_tracked.mp4       every frame with the last committed state drawn, plus a status line
-
+- make_reference : everything worked out once from the first frame (cloth colour, table corners,
+  photo to map transforms, the small masks used by the motion and obstruction tests)
+- read_board : the ball list for one frame
+- count_colours, match_balls, same_reading : comparing two readings
 """
 
 import cv2
 import numpy as np
-import config, table_mask, table_corners, top_down, ball_detection, draw
-from shot_detection import shrink_to_gray, moving_pixels, view_is_blocked, update_detector
-from ball_tracking import initialise_tracking, track_frame, closest_pocket
+import config, table_mask, table_corners, top_down, ball_detection
 
 def make_reference(first_frame, click_x, click_y):
     """
@@ -19,7 +17,7 @@ def make_reference(first_frame, click_x, click_y):
     Output: a dictionary with
     - cloth_colour: (h, s, v) of the cloth
     - table_hull, corners: outline and four corners (long side first), full-frame pixels
-    - to_map, to_photo: photo <-> map matrices
+    - to_map, to_photo: photo to map matrices
     - inner_small: filled hull at SIGNAL_SCALE, trimmed by TABLE_EDGE_TRIM px so the cushions do not count
     - edge_small: a thin ring just inside the trimmed hull (for the "touches the edge" test)
     - table_area_small: number of pixels in the hull at SIGNAL_SCALE (the fractions in config are of this)

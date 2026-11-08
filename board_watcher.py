@@ -1,7 +1,7 @@
 """
-Step 7a: turn a video into shots for the scoring rules (game_state.py).
+Turn a video into shots for the scoring rules (game_state.py).
 
-Uses board_reading.py's tests to get trusted board states:
+Uses shot_detection.py, obstruction.py and board_reading.py to get trusted board states:
 - is the table still (moving pixels), is the view clear (no arm or cue over the table)
 - two readings half a second apart must agree before a state is kept
 
@@ -15,7 +15,7 @@ import cv2
 import numpy as np
 
 import ball_tracking
-from ball_tracking import initialise_tracking, track_frame, first_contact
+from ball_tracking import initialise_tracking, track_frame
 import config
 import board_reading
 import table_mask
@@ -131,9 +131,9 @@ class BoardWatcher:
         self.last_tracks = None
         self.camera_was_moved = False
         self.shift_window = None
-        # Obstruction detection filters (from obstruction.py)
+
         self.blocked_filter = obstruction.new_blocked_filter()
-        self.lump_mask = None  # Stored for per-ball hidden detection during shots
+        self.lump_mask = None  # obstruction lumps this frame, for the per-ball hidden test
 
     def update(self, frame, t=None):
         """
@@ -152,21 +152,19 @@ class BoardWatcher:
         gray = shrink_to_gray(frame)
         moving = moving_pixels(gray, self.previous_gray, self.reference)
 
-        # Obstruction detection - get lump mask for per-ball hidden detection
-        # Wrapped in try/except so original tracking still works if obstruction module fails
+        # Obstructions (arm, hand, cue, body) over the table. If the test fails on a frame, tracking carries on without the per-ball hidden flags.
         try:
             self.lump_mask, lumps = obstruction.unexplained_lumps(frame, self.reference)
             blocked_now = obstruction.view_is_blocked(lumps)
             obstruction.update_blocked(self.blocked_filter, blocked_now)
         except Exception:
-            self.lump_mask = None  # Fall back if obstruction detection fails
+            self.lump_mask = None  
 
         camera_moving = self.camera_moved(gray)
         self.previous_gray = gray
         if camera_moving:
             # Someone has knocked or picked up the camera: every position from here on is off.
-            # Stop tracking (the GUI falls back to the last kept board) and find the table again
-            # before the next reading.
+            # Stop tracking (the GUI falls back to the last kept board) and find the table again before the next reading.
             self.tracks = None
             self.last_tracks = None
             self.camera_was_moved = True
@@ -196,11 +194,10 @@ class BoardWatcher:
                     for track, is_hidden in zip(visible_tracks, hidden_flags):
                         track['hidden'] = is_hidden
                 except Exception:
-                    pass  # Fall back to no hidden detection if it fails
+                    pass  # no hidden flags this frame
 
-            # Someone leaning right over the balls hides them and their clothes can look like
-            # balls: hold every ball where it is until they move away. (A player bent over a
-            # corner to take a shot is just as big, but is not over the balls, so is ignored.)
+            # Someone leaning right over the balls hides them and their clothes can look like balls: hold every ball where it is until they move away. 
+            # (A player bent over a corner to take a shot is just as big, but is not over the balls, so is ignored.)
             body_over_table = self.tracks is not None and self.covers_balls(frame)
             if body_over_table:
                 self.status_note = 'player over table'
@@ -231,7 +228,7 @@ class BoardWatcher:
             self.frames_since_reading = self.frames_since_reading + 1
             if self.frames_since_reading >= config.READ_EVERY:
                 self.frames_since_reading = 0
-                # Blocked if the old area test says so, or obstruction.py has seen an arm, hand,
+                # Blocked if the area test says so, or obstruction.py has seen an arm, hand,
                 # cue or body over the table in the last CLEAR_FRAMES frames (its smoothed flag).
                 self.detector['blocked'] = view_is_blocked(frame, self.reference) or self.blocked_filter['blocked']
                 if self.detector['blocked']:

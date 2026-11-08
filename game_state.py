@@ -1,5 +1,5 @@
 """
-Step 7: keep score. Applies the rules of blackball pool to what was potted on each shot.
+Keeps score. Applies the rules of blackball pool to what was potted on each shot.
 
 - Two players, 7 reds, 7 yellows, 1 black, 1 cue ball
 - Table is open until a player pots only one colour; that colour becomes theirs

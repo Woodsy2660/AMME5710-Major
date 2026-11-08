@@ -78,7 +78,7 @@ def process_image(image_path, output_dir):
     try:
         image_bgr = cv2.imread(image_path)
         if image_bgr is None:
-            print(f"  Failed to load image")
+            print("  Failed to load image")
             return False
 
         balls, table_hull, corners = detect(image_bgr)

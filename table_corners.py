@@ -1,5 +1,5 @@
 """
-Step 2: turn thee table hull into four corners, work out which sides are the long ones 
+Turn the table hull into four corners, work out which sides are the long ones 
 
 - treat each hull edge as a line 
 - k-means into four groups (four sides)

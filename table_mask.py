@@ -1,9 +1,9 @@
 """
-Step 1: find the blue cloth, then the outline of the table.
+Find the blue cloth, then the outline of the table.
 
 - Threshold cloth colour (blue) in HSV 
 - Clean up with opening and closing morphological operations
-- Keep largest colour and take its convex hull 
+- Keep largest cloth-colour region and take its convex hull 
 
 """
 
@@ -75,21 +75,6 @@ def find_cloth_mask(image_bgr, click_x, click_y, cloth_colour=None):
     if cloth_colour is None:
         cloth_colour = cloth_colour_at(image_bgr, click_x, click_y)
     cloth_hue, cloth_saturation, cloth_value = cloth_colour
-
-    # hue = image_hsv[:, :, 0].astype(float)
-    # saturation = image_hsv[:, :, 1].astype(float)
-    # value = image_hsv[:, :, 2].astype(float)
-
-    # # Hue is an angle that wraps round (179 is next to 0), so the difference
-    # # between two hues is the shorter way round the circle.
-    # hue_difference = np.abs(hue - cloth_hue)
-    # hue_difference = np.minimum(hue_difference, 180 - hue_difference)
-
-    # is_cloth = (hue_difference < config.CLOTH_HUE_TOLERANCE) \
-    #     & (np.abs(value - cloth_value) < config.CLOTH_VALUE_TOLERANCE) \
-    #     & (saturation > cloth_saturation - config.CLOTH_SATURATION_DROP)
-
-    # cloth_mask = (is_cloth * 255).astype(np.uint8)
 
     levels = np.arange(256, dtype=float)
     hue_difference = np.abs(levels - cloth_hue)

@@ -13,7 +13,6 @@ Files written (folder given with gui.py --log, e.g. --log logs):
 
 import csv
 import os
-import time
 
 import numpy as np
 

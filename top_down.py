@@ -1,5 +1,5 @@
 """
-Step 3: map between the photo and the top-down view 
+Map between the photo and the top-down view 
 
 - perspective transform (homography) from the four table corners to a 2:1 rectangle 
 - applied to ball positions, not the whole image 

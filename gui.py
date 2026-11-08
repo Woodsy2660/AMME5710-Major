@@ -1,5 +1,5 @@
 """
-Step 8: the live tracking window. The camera on the left, a top-down table on the right,
+Live tracking window. The camera on the left, a top-down table on the right,
 with every ball drawn where it is now and a fading trail behind each rolling ball.
 
 - board_watcher.py follows the game: between shots the balls come from the last agreed board
@@ -10,8 +10,7 @@ with every ball drawn where it is now and a fading trail behind each rolling bal
   potted (from game_state.py). u (undo), s (swap turn) and c (swap colours) correct it if it goes wrong.
 
 Usage
-    python gui.py                          webcam 0 (an iPhone via Continuity Camera)
-    python gui.py --camera 1               another webcam
+    python gui.py                          webcam 0 (e.g. an iPhone via Continuity Camera)
     python gui.py --video game.mp4         a recorded game
     python gui.py --photos "Table images"  step through still photos (space = next)
     python gui.py --video game.mp4 --speed 2               play at twice real time
@@ -104,8 +103,7 @@ def draw_camera(frame, balls, reference):
 
 def draw_table(balls):
     """
-    The top-down table (draw.draw_map) with each rolling ball's trail this shot, turned 180
-    degrees to match the camera (as on Ben's branch).
+    The top-down table (draw.draw_map) with each rolling ball's trail this shot, turned 180 degrees to match the camera 
     """
     picture = draw.draw_map(balls)
     border = config.MAP_BORDER
